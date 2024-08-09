@@ -18,9 +18,10 @@
 package org.jackhuang.hmcl.util.platform;
 
 import java.io.IOException;
-import java.lang.ProcessBuilder.Redirect;
 import java.util.Arrays;
 import java.util.List;
+
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 public final class SystemUtils {
     private SystemUtils() {}
@@ -30,10 +31,22 @@ public final class SystemUtils {
     }
 
     public static int callExternalProcess(List<String> command) throws IOException, InterruptedException {
-        Process process = new ProcessBuilder(command)
-                .redirectOutput(Redirect.INHERIT)
-                .redirectError(Redirect.INHERIT)
-                .start();
-        return process.waitFor();
+        return callExternalProcess(new ProcessBuilder(command));
+    }
+
+    public static int callExternalProcess(ProcessBuilder processBuilder) throws IOException, InterruptedException {
+        ManagedProcess managedProcess = new ManagedProcess(processBuilder);
+        managedProcess.pumpInputStream(SystemUtils::onLogLine);
+        managedProcess.pumpErrorStream(SystemUtils::onLogLine);
+        return managedProcess.getProcess().waitFor();
+    }
+
+    public static boolean supportJVMAttachment() {
+        return JavaVersion.CURRENT_JAVA.getParsedVersion() >= 9
+                && Thread.currentThread().getContextClassLoader().getResource("com/sun/tools/attach/VirtualMachine.class") != null;
+    }
+
+    private static void onLogLine(String log) {
+        LOG.info(log);
     }
 }

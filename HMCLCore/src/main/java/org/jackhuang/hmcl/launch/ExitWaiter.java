@@ -24,14 +24,13 @@ import org.jackhuang.hmcl.event.ProcessStoppedEvent;
 import org.jackhuang.hmcl.util.Log4jLevel;
 import org.jackhuang.hmcl.util.StringUtils;
 import org.jackhuang.hmcl.util.platform.ManagedProcess;
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 
 import java.util.Collection;
 import java.util.List;
 import java.util.function.BiConsumer;
-import java.util.stream.Collectors;
 
 /**
- *
  * @author huangyuhui
  */
 final class ExitWaiter implements Runnable {
@@ -60,8 +59,7 @@ final class ExitWaiter implements Runnable {
             for (Thread thread : joins)
                 thread.join();
 
-            List<String> errorLines = process.getLines().stream()
-                    .filter(Log4jLevel::guessLogLineError).collect(Collectors.toList());
+            List<String> errorLines = process.getLines(Log4jLevel::guessLogLineError);
             ProcessListener.ExitType exitType;
 
             // LaunchWrapper will catch the exception logged and will exit normally.
@@ -71,11 +69,19 @@ final class ExitWaiter implements Runnable {
                     "A fatal exception has occurred. Program will exit.")) {
                 EventBus.EVENT_BUS.fireEvent(new JVMLaunchFailedEvent(this, process));
                 exitType = ProcessListener.ExitType.JVM_ERROR;
-            } else if (exitCode != 0 || StringUtils.containsOne(errorLines, "Unable to launch")) {
+            } else if (exitCode != 0 || StringUtils.containsOne(errorLines,
+                    "Crash report saved to", "Could not save crash report to", "This crash report has been saved to:",
+                    "Unable to launch", "An exception was thrown, the game will display an error screen and halt.")) {
                 EventBus.EVENT_BUS.fireEvent(new ProcessExitedAbnormallyEvent(this, process));
-                exitType = ProcessListener.ExitType.APPLICATION_ERROR;
-            } else
+
+                if (exitCode == 137 && OperatingSystem.CURRENT_OS.isLinuxOrBSD()) {
+                    exitType = ProcessListener.ExitType.SIGKILL;
+                } else {
+                    exitType = ProcessListener.ExitType.APPLICATION_ERROR;
+                }
+            } else {
                 exitType = ProcessListener.ExitType.NORMAL;
+            }
 
             EventBus.EVENT_BUS.fireEvent(new ProcessStoppedEvent(this, process));
 

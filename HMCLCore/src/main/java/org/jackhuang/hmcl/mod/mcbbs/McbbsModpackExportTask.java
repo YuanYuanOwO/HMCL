@@ -27,7 +27,7 @@ import org.jackhuang.hmcl.mod.curse.CurseManifest;
 import org.jackhuang.hmcl.mod.curse.CurseManifestMinecraft;
 import org.jackhuang.hmcl.mod.curse.CurseManifestModLoader;
 import org.jackhuang.hmcl.task.Task;
-import org.jackhuang.hmcl.util.Logging;
+import org.jackhuang.hmcl.util.DigestUtils;
 import org.jackhuang.hmcl.util.StringUtils;
 import org.jackhuang.hmcl.util.gson.JsonUtils;
 import org.jackhuang.hmcl.util.io.Zipper;
@@ -41,8 +41,7 @@ import java.util.Collections;
 import java.util.List;
 
 import static org.jackhuang.hmcl.download.LibraryAnalyzer.LibraryType.*;
-import static org.jackhuang.hmcl.util.DigestUtils.digest;
-import static org.jackhuang.hmcl.util.Hex.encodeHex;
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 public class McbbsModpackExportTask extends Task<Void> {
     private final DefaultGameRepository repository;
@@ -66,7 +65,7 @@ public class McbbsModpackExportTask extends Task<Void> {
         ArrayList<String> blackList = new ArrayList<>(ModAdviser.MODPACK_BLACK_LIST);
         blackList.add(version + ".jar");
         blackList.add(version + ".json");
-        Logging.LOG.info("Compressing game files without some files in blacklist, including files or directories: usernamecache.json, asm, logs, backups, versions, assets, usercache.json, libraries, crash-reports, launcher_profiles.json, NVIDIA, TCNodeTracker");
+        LOG.info("Compressing game files without some files in blacklist, including files or directories: usernamecache.json, asm, logs, backups, versions, assets, usercache.json, libraries, crash-reports, launcher_profiles.json, NVIDIA, TCNodeTracker");
         try (Zipper zip = new Zipper(modpackFile.toPath())) {
             Path runDirectory = repository.getRunDirectory(version).toPath();
             List<McbbsModpackManifest.File> files = new ArrayList<>();
@@ -75,7 +74,7 @@ public class McbbsModpackExportTask extends Task<Void> {
                     Path file = runDirectory.resolve(path);
                     if (Files.isRegularFile(file)) {
                         String relativePath = runDirectory.relativize(file).normalize().toString().replace(File.separatorChar, '/');
-                        files.add(new McbbsModpackManifest.AddonFile(true, relativePath, encodeHex(digest("SHA-1", file))));
+                        files.add(new McbbsModpackManifest.AddonFile(true, relativePath, DigestUtils.digestToString("SHA-1", file)));
                     }
                     return true;
                 } else {
@@ -83,21 +82,25 @@ public class McbbsModpackExportTask extends Task<Void> {
                 }
             });
 
-            LibraryAnalyzer analyzer = LibraryAnalyzer.analyze(repository.getResolvedPreservingPatchesVersion(version));
             String gameVersion = repository.getGameVersion(version)
                     .orElseThrow(() -> new IOException("Cannot parse the version of " + version));
+            LibraryAnalyzer analyzer = LibraryAnalyzer.analyze(repository.getResolvedPreservingPatchesVersion(version), gameVersion);
 
             // Mcbbs manifest
             List<McbbsModpackManifest.Addon> addons = new ArrayList<>();
             addons.add(new McbbsModpackManifest.Addon(MINECRAFT.getPatchId(), gameVersion));
             analyzer.getVersion(FORGE).ifPresent(forgeVersion ->
                     addons.add(new McbbsModpackManifest.Addon(FORGE.getPatchId(), forgeVersion)));
+            analyzer.getVersion(NEO_FORGE).ifPresent(neoForgeVersion ->
+                    addons.add(new McbbsModpackManifest.Addon(NEO_FORGE.getPatchId(), neoForgeVersion)));
             analyzer.getVersion(LITELOADER).ifPresent(liteLoaderVersion ->
                     addons.add(new McbbsModpackManifest.Addon(LITELOADER.getPatchId(), liteLoaderVersion)));
             analyzer.getVersion(OPTIFINE).ifPresent(optifineVersion ->
                     addons.add(new McbbsModpackManifest.Addon(OPTIFINE.getPatchId(), optifineVersion)));
             analyzer.getVersion(FABRIC).ifPresent(fabricVersion ->
                     addons.add(new McbbsModpackManifest.Addon(FABRIC.getPatchId(), fabricVersion)));
+            analyzer.getVersion(QUILT).ifPresent(quiltVersion ->
+                    addons.add(new McbbsModpackManifest.Addon(QUILT.getPatchId(), quiltVersion)));
 
             List<Library> libraries = new ArrayList<>();
             // TODO libraries
@@ -114,6 +117,7 @@ public class McbbsModpackExportTask extends Task<Void> {
             // CurseForge manifest
             List<CurseManifestModLoader> modLoaders = new ArrayList<>();
             analyzer.getVersion(FORGE).ifPresent(forgeVersion -> modLoaders.add(new CurseManifestModLoader("forge-" + forgeVersion, true)));
+            analyzer.getVersion(NEO_FORGE).ifPresent(forgeVersion -> modLoaders.add(new CurseManifestModLoader("neoforge-" + forgeVersion, true)));
             analyzer.getVersion(FABRIC).ifPresent(fabricVersion -> modLoaders.add(new CurseManifestModLoader("fabric-" + fabricVersion, true)));
             // OptiFine and LiteLoader are not supported by CurseForge modpack.
             CurseManifest curseManifest = new CurseManifest(CurseManifest.MINECRAFT_MODPACK, 1, info.getName(), info.getVersion(), info.getAuthor(), "overrides", new CurseManifestMinecraft(gameVersion, modLoaders), Collections.emptyList());

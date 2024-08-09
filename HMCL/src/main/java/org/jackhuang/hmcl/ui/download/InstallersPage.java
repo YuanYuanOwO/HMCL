@@ -21,22 +21,19 @@ import com.jfoenix.controls.JFXButton;
 import com.jfoenix.controls.JFXTextField;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.SimpleBooleanProperty;
-import javafx.fxml.FXML;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
-import javafx.scene.control.Control;
-import javafx.scene.control.Label;
-import javafx.scene.control.Skin;
-import javafx.scene.control.SkinBase;
+import javafx.scene.control.*;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
-import javafx.scene.layout.VBox;
 import org.jackhuang.hmcl.download.DownloadProvider;
+import org.jackhuang.hmcl.download.LibraryAnalyzer;
 import org.jackhuang.hmcl.download.RemoteVersion;
 import org.jackhuang.hmcl.game.HMCLGameRepository;
 import org.jackhuang.hmcl.ui.Controllers;
+import org.jackhuang.hmcl.ui.FXUtils;
 import org.jackhuang.hmcl.ui.InstallerItem;
-import org.jackhuang.hmcl.ui.construct.ComponentList;
 import org.jackhuang.hmcl.ui.construct.MessageDialogPane;
 import org.jackhuang.hmcl.ui.construct.RequiredValidator;
 import org.jackhuang.hmcl.ui.construct.Validator;
@@ -51,12 +48,13 @@ import static org.jackhuang.hmcl.util.i18n.I18n.i18n;
 public class InstallersPage extends Control implements WizardPage {
     protected final WizardController controller;
 
-    protected InstallerItem.InstallerItemGroup group = new InstallerItem.InstallerItemGroup();
+    protected InstallerItem.InstallerItemGroup group;
     protected JFXTextField txtName = new JFXTextField();
     protected BooleanProperty installable = new SimpleBooleanProperty();
 
     public InstallersPage(WizardController controller, HMCLGameRepository repository, String gameVersion, DownloadProvider downloadProvider) {
         this.controller = controller;
+        this.group = new InstallerItem.InstallerItemGroup(gameVersion, getInstallerItemStyle());
 
         txtName.getValidators().addAll(
                 new RequiredValidator(),
@@ -65,29 +63,31 @@ public class InstallersPage extends Control implements WizardPage {
         installable.bind(createBooleanBinding(txtName::validate, txtName.textProperty()));
         txtName.setText(gameVersion);
 
-        group.game.installable.setValue(false);
-
         for (InstallerItem library : group.getLibraries()) {
             String libraryId = library.getLibraryId();
-            if (libraryId.equals("game")) continue;
-            library.action.set(e -> {
-                if ("fabric-api".equals(libraryId)) {
+            if (libraryId.equals(LibraryAnalyzer.LibraryType.MINECRAFT.getPatchId())) continue;
+            library.installActionProperty().set(e -> {
+                if (LibraryAnalyzer.LibraryType.FABRIC_API.getPatchId().equals(libraryId)) {
                     Controllers.dialog(i18n("install.installer.fabric-api.warning"), i18n("message.warning"), MessageDialogPane.MessageType.WARNING);
                 }
 
-                if (library.incompatibleLibraryName.get() == null)
+                if (!(library.resolvedStateProperty().get() instanceof InstallerItem.IncompatibleState))
                     controller.onNext(new VersionsPage(controller, i18n("install.installer.choose", i18n("install.installer." + libraryId)), gameVersion, downloadProvider, libraryId, () -> controller.onPrev(false)));
             });
-            library.removeAction.set(e -> {
+            library.removeActionProperty().set(e -> {
                 controller.getSettings().remove(libraryId);
                 reload();
             });
         }
     }
 
+    protected InstallerItem.Style getInstallerItemStyle() {
+        return InstallerItem.Style.CARD;
+    }
+
     @Override
     public String getTitle() {
-        return i18n("install.new_game");
+        return group.getGame().versionProperty().get().getVersion();
     }
 
     private String getVersion(String id) {
@@ -98,11 +98,9 @@ public class InstallersPage extends Control implements WizardPage {
         for (InstallerItem library : group.getLibraries()) {
             String libraryId = library.getLibraryId();
             if (controller.getSettings().containsKey(libraryId)) {
-                library.libraryVersion.set(getVersion(libraryId));
-                library.removable.set(true);
+                library.versionProperty().set(new InstallerItem.InstalledState(getVersion(libraryId), false, false));
             } else {
-                library.libraryVersion.set(null);
-                library.removable.set(false);
+                library.versionProperty().set(null);
             }
         }
     }
@@ -116,7 +114,6 @@ public class InstallersPage extends Control implements WizardPage {
     public void cleanup(Map<String, Object> settings) {
     }
 
-    @FXML
     protected void onInstall() {
         controller.getSettings().put("name", txtName.getText());
         controller.onFinish();
@@ -140,30 +137,40 @@ public class InstallersPage extends Control implements WizardPage {
             BorderPane root = new BorderPane();
             root.setPadding(new Insets(16));
 
-            ComponentList list = new ComponentList();
-            list.getStyleClass().add("no-padding");
-            root.setCenter(list);
             {
                 HBox versionNamePane = new HBox(8);
+                versionNamePane.getStyleClass().add("card-non-transparent");
+                versionNamePane.setStyle("-fx-padding: 20 8 20 16");
                 versionNamePane.setAlignment(Pos.CENTER_LEFT);
-                versionNamePane.setPadding(new Insets(20, 8, 20, 16));
 
                 control.txtName.setMaxWidth(300);
-                versionNamePane.getChildren().setAll(new Label(i18n("archive.name")), control.txtName);
-                list.getContent().add(versionNamePane);
+                versionNamePane.getChildren().setAll(new Label(i18n("version.name")), control.txtName);
+                root.setTop(versionNamePane);
             }
 
             {
-                VBox libraryPane = new VBox(control.group.getLibraries());
-                list.getContent().add(libraryPane);
+                InstallerItem[] libraries = control.group.getLibraries();
+
+                FlowPane libraryPane = new FlowPane(libraries);
+                libraryPane.setVgap(16);
+                libraryPane.setHgap(16);
+
+                if (libraries.length <= 8) {
+                    BorderPane.setMargin(libraryPane, new Insets(16, 0, 16, 0));
+                    root.setCenter(libraryPane);
+                } else {
+                    ScrollPane scrollPane = new ScrollPane(libraryPane);
+                    scrollPane.setFitToWidth(true);
+                    scrollPane.setFitToHeight(true);
+                    BorderPane.setMargin(scrollPane, new Insets(16, 0, 16, 0));
+                    root.setCenter(scrollPane);
+                }
             }
 
 
             {
-                JFXButton installButton = new JFXButton(i18n("button.install"));
+                JFXButton installButton = FXUtils.newRaisedButton(i18n("button.install"));
                 installButton.disableProperty().bind(control.installable.not());
-                installButton.getStyleClass().add("jfx-button-raised");
-                installButton.setButtonType(JFXButton.ButtonType.RAISED);
                 installButton.setPrefWidth(100);
                 installButton.setPrefHeight(40);
                 installButton.setOnMouseClicked(e -> control.onInstall());

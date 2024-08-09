@@ -17,20 +17,20 @@
  */
 package org.jackhuang.hmcl.setting;
 
-import com.google.gson.Gson;
 import com.google.gson.JsonParseException;
 import org.jackhuang.hmcl.Metadata;
 import org.jackhuang.hmcl.util.InvocationDispatcher;
 import org.jackhuang.hmcl.util.Lang;
+import org.jackhuang.hmcl.util.i18n.I18n;
 import org.jackhuang.hmcl.util.io.FileUtils;
+import org.jackhuang.hmcl.util.io.JarUtils;
 import org.jackhuang.hmcl.util.platform.OperatingSystem;
 
 import java.io.IOException;
 import java.nio.file.*;
-import java.util.Map;
-import java.util.logging.Level;
+import java.util.Locale;
 
-import static org.jackhuang.hmcl.util.Logging.LOG;
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 public final class ConfigHolder {
 
@@ -45,6 +45,7 @@ public final class ConfigHolder {
     private static Config configInstance;
     private static GlobalConfig globalConfigInstance;
     private static boolean newlyCreated;
+    private static boolean ownerChanged = false;
 
     public static Config config() {
         if (configInstance == null) {
@@ -60,18 +61,26 @@ public final class ConfigHolder {
         return globalConfigInstance;
     }
 
+    public static Path configLocation() {
+        return configLocation;
+    }
+
     public static boolean isNewlyCreated() {
         return newlyCreated;
     }
 
-    public synchronized static void init() throws IOException {
+    public static boolean isOwnerChanged() {
+        return ownerChanged;
+    }
+
+    public static void init() throws IOException {
         if (configInstance != null) {
             throw new IllegalStateException("Configuration is already loaded");
         }
 
         configLocation = locateConfig();
 
-        LOG.log(Level.INFO, "Config location: " + configLocation);
+        LOG.info("Config location: " + configLocation);
 
         configInstance = loadConfig();
         configInstance.addListener(source -> markConfigDirty());
@@ -79,6 +88,9 @@ public final class ConfigHolder {
         globalConfigInstance = loadGlobalConfig();
         globalConfigInstance.addListener(source -> markGlobalConfigDirty());
 
+        Locale.setDefault(config().getLocalization().getLocale());
+        I18n.setLocale(configInstance.getLocalization());
+        LOG.setLogRetention(globalConfig().getLogRetention());
         Settings.init();
 
         if (newlyCreated) {
@@ -89,7 +101,7 @@ public final class ConfigHolder {
                 try {
                     Files.setAttribute(configLocation, "dos:hidden", true);
                 } catch (IOException e) {
-                    LOG.log(Level.WARNING, "Failed to set hidden attribute of " + configLocation, e);
+                    LOG.warning("Failed to set hidden attribute of " + configLocation, e);
                 }
             }
         }
@@ -109,11 +121,10 @@ public final class ConfigHolder {
     }
 
     private static Path locateConfig() {
-        Path exePath = Paths.get("");
+        Path exePath = Paths.get("").toAbsolutePath();
         try {
-            Path jarPath = Paths.get(ConfigHolder.class.getProtectionDomain().getCodeSource().getLocation()
-                    .toURI()).toAbsolutePath();
-            if (Files.isRegularFile(jarPath) && Files.isWritable(jarPath)) {
+            Path jarPath = JarUtils.thisJarPath();
+            if (jarPath != null && Files.isRegularFile(jarPath) && Files.isWritable(jarPath)) {
                 jarPath = jarPath.getParent();
                 exePath = jarPath;
 
@@ -144,17 +155,25 @@ public final class ConfigHolder {
     private static Config loadConfig() throws IOException {
         if (Files.exists(configLocation)) {
             try {
+                if (OperatingSystem.CURRENT_OS != OperatingSystem.WINDOWS
+                        && "root".equals(System.getProperty("user.name"))
+                        && !"root".equals(Files.getOwner(configLocation).getName())) {
+                    ownerChanged = true;
+                }
+            } catch (IOException e1) {
+                LOG.warning("Failed to get owner");
+            }
+            try {
                 String content = FileUtils.readText(configLocation);
                 Config deserialized = Config.fromJson(content);
                 if (deserialized == null) {
                     LOG.info("Config is empty");
                 } else {
-                    Map<?, ?> raw = new Gson().fromJson(content, Map.class);
-                    ConfigUpgrader.upgradeConfig(deserialized, raw);
+                    ConfigUpgrader.upgradeConfig(deserialized, content);
                     return deserialized;
                 }
             } catch (JsonParseException e) {
-                LOG.log(Level.WARNING, "Malformed config.", e);
+                LOG.warning("Malformed config.", e);
             }
         }
 
@@ -167,7 +186,7 @@ public final class ConfigHolder {
         try {
             writeToConfig(content);
         } catch (IOException e) {
-            LOG.log(Level.SEVERE, "Failed to save config", e);
+            LOG.error("Failed to save config", e);
         }
     });
 
@@ -199,7 +218,7 @@ public final class ConfigHolder {
                     return deserialized;
                 }
             } catch (JsonParseException e) {
-                LOG.log(Level.WARNING, "Malformed config.", e);
+                LOG.warning("Malformed config.", e);
             }
         }
 
@@ -211,7 +230,7 @@ public final class ConfigHolder {
         try {
             writeToGlobalConfig(content);
         } catch (IOException e) {
-            LOG.log(Level.SEVERE, "Failed to save config", e);
+            LOG.error("Failed to save config", e);
         }
     });
 

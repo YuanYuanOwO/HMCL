@@ -35,13 +35,13 @@ public abstract class Modpack {
     private String gameVersion;
     private String description;
     private transient Charset encoding;
-    private Object manifest;
+    private ModpackManifest manifest;
 
     public Modpack() {
         this("", null, null, null, null, null, null);
     }
 
-    public Modpack(String name, String author, String version, String gameVersion, String description, Charset encoding, Object manifest) {
+    public Modpack(String name, String author, String version, String gameVersion, String description, Charset encoding, ModpackManifest manifest) {
         this.name = name;
         this.author = author;
         this.version = version;
@@ -105,11 +105,11 @@ public abstract class Modpack {
         return this;
     }
 
-    public Object getManifest() {
+    public ModpackManifest getManifest() {
         return manifest;
     }
 
-    public Modpack setManifest(Object manifest) {
+    public Modpack setManifest(ModpackManifest manifest) {
         this.manifest = manifest;
         return this;
     }
@@ -119,9 +119,8 @@ public abstract class Modpack {
     public static boolean acceptFile(String path, List<String> blackList, List<String> whiteList) {
         if (path.isEmpty())
             return true;
-        for (String s : blackList)
-            if (path.equals(s))
-                return false;
+        if (ModAdviser.match(blackList, path, false))
+            return false;
         if (whiteList == null || whiteList.isEmpty())
             return true;
         for (String s : whiteList)

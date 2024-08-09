@@ -37,6 +37,7 @@ import org.jackhuang.hmcl.ui.SVG;
 import org.jackhuang.hmcl.ui.construct.ComponentList;
 import org.jackhuang.hmcl.ui.construct.ComponentSublist;
 import org.jackhuang.hmcl.ui.construct.MultiFileItem;
+import org.jackhuang.hmcl.util.i18n.I18n;
 import org.jackhuang.hmcl.util.i18n.Locales.SupportedLocale;
 
 import java.util.Arrays;
@@ -121,7 +122,7 @@ public abstract class SettingsView extends StackPane {
                         btnUpdate = new JFXButton();
                         btnUpdate.setOnMouseClicked(e -> onUpdate());
                         btnUpdate.getStyleClass().add("toggle-icon4");
-                        btnUpdate.setGraphic(SVG.update(Theme.blackFillBinding(), 20, 20));
+                        btnUpdate.setGraphic(SVG.UPDATE.createIcon(Theme.blackFill(), 20, 20));
 
                         updatePane.setHeaderRight(btnUpdate);
                     }
@@ -176,8 +177,8 @@ public abstract class SettingsView extends StackPane {
                     languagePane.setLeft(left);
 
                     cboLanguage = new JFXComboBox<>();
-                    cboLanguage.setConverter(stringConverter(locale -> locale.getName(config().getLocalization().getResourceBundle())));
-                    FXUtils.setLimitWidth(cboLanguage, 400);
+                    cboLanguage.setConverter(stringConverter(I18n::getName));
+                    FXUtils.setLimitWidth(cboLanguage, 300);
                     languagePane.setRight(cboLanguage);
 
                     settingsPane.getContent().add(languagePane);

@@ -19,22 +19,26 @@ package org.jackhuang.hmcl.util.io;
 
 import org.jackhuang.hmcl.util.Lang;
 import org.jackhuang.hmcl.util.StringUtils;
+import org.jackhuang.hmcl.util.function.ExceptionalConsumer;
+import org.jackhuang.hmcl.util.platform.OperatingSystem;
 
-import java.io.BufferedWriter;
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.IOException;
+import java.io.*;
 import java.lang.reflect.Method;
 import java.nio.charset.Charset;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Predicate;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 /**
  * @author huang
@@ -144,6 +148,21 @@ public final class FileUtils {
     }
 
     /**
+     * Write plain text to file. Characters are encoded into bytes using UTF-8.
+     * <p>
+     * We don't care about platform difference of line separator. Because readText accept all possibilities of line separator.
+     * It will create the file if it does not exist, or truncate the existing file to empty for rewriting.
+     * All characters in text will be written into the file in binary format. Existing data will be erased.
+     *
+     * @param file the path to the file
+     * @param text the text being written to file
+     * @throws IOException if an I/O error occurs
+     */
+    public static void writeText(Path file, String text) throws IOException {
+        writeText(file, text, UTF_8);
+    }
+
+    /**
      * Write plain text to file.
      * <p>
      * We don't care about platform difference of line separator. Because readText accept all possibilities of line separator.
@@ -160,17 +179,46 @@ public final class FileUtils {
     }
 
     /**
+     * Write plain text to file.
+     * <p>
+     * We don't care about platform difference of line separator. Because readText accept all possibilities of line separator.
+     * It will create the file if it does not exist, or truncate the existing file to empty for rewriting.
+     * All characters in text will be written into the file in binary format. Existing data will be erased.
+     *
+     * @param file    the path to the file
+     * @param text    the text being written to file
+     * @param charset the charset to use for encoding
+     * @throws IOException if an I/O error occurs
+     */
+    public static void writeText(Path file, String text, Charset charset) throws IOException {
+        writeBytes(file, text.getBytes(charset));
+    }
+
+    /**
      * Write byte array to file.
      * It will create the file if it does not exist, or truncate the existing file to empty for rewriting.
      * All bytes in byte array will be written into the file in binary format. Existing data will be erased.
      *
      * @param file  the path to the file
-     * @param array the data being written to file
+     * @param data the data being written to file
      * @throws IOException if an I/O error occurs
      */
-    public static void writeBytes(File file, byte[] array) throws IOException {
-        Files.createDirectories(file.toPath().getParent());
-        Files.write(file.toPath(), array);
+    public static void writeBytes(File file, byte[] data) throws IOException {
+        writeBytes(file.toPath(), data);
+    }
+
+    /**
+     * Write byte array to file.
+     * It will create the file if it does not exist, or truncate the existing file to empty for rewriting.
+     * All bytes in byte array will be written into the file in binary format. Existing data will be erased.
+     *
+     * @param file  the path to the file
+     * @param data the data being written to file
+     * @throws IOException if an I/O error occurs
+     */
+    public static void writeBytes(Path file, byte[] data) throws IOException {
+        Files.createDirectories(file.getParent());
+        Files.write(file, data);
     }
 
     public static void deleteDirectory(File directory)
@@ -235,6 +283,33 @@ public final class FileUtils {
         });
     }
 
+    public static boolean hasKnownDesktop() {
+        if (!OperatingSystem.CURRENT_OS.isLinuxOrBSD())
+            return true;
+
+        String desktops = System.getenv("XDG_CURRENT_DESKTOP");
+        if (desktops == null) {
+            desktops = System.getenv("XDG_SESSION_DESKTOP");
+        }
+
+        if (desktops == null) {
+            return false;
+        }
+        for (String desktop : desktops.split(":")) {
+            switch (desktop.toLowerCase(Locale.ROOT)) {
+                case "gnome":
+                case "xfce":
+                case "kde":
+                case "mate":
+                case "deepin":
+                case "x-cinnamon":
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
     /**
      * Move file to trash.
      * <p>
@@ -251,6 +326,56 @@ public final class FileUtils {
      * @see FileUtils#isMovingToTrashSupported()
      */
     public static boolean moveToTrash(File file) {
+        if (OperatingSystem.CURRENT_OS.isLinuxOrBSD() && hasKnownDesktop()) {
+            if (!file.exists()) {
+                return false;
+            }
+
+            String xdgData = System.getenv("XDG_DATA_HOME");
+
+            Path trashDir;
+            if (StringUtils.isNotBlank(xdgData)) {
+                trashDir = Paths.get(xdgData, "Trash");
+            } else {
+                trashDir = Paths.get(System.getProperty("user.home"), ".local/share/Trash");
+            }
+
+            Path infoDir = trashDir.resolve("info");
+            Path filesDir = trashDir.resolve("files");
+
+            try {
+                Files.createDirectories(infoDir);
+                Files.createDirectories(filesDir);
+
+                String name = file.getName();
+
+                Path infoFile = infoDir.resolve(name + ".trashinfo");
+                Path targetFile = filesDir.resolve(name);
+
+                int n = 0;
+                while (Files.exists(infoFile) || Files.exists(targetFile)) {
+                    n++;
+                    infoFile = infoDir.resolve(name + "." + n + ".trashinfo");
+                    targetFile = filesDir.resolve(name + "." + n);
+                }
+
+                String time = DateTimeFormatter.ISO_LOCAL_DATE_TIME.format(ZonedDateTime.now().truncatedTo(ChronoUnit.SECONDS));
+                if (file.isDirectory()) {
+                    FileUtils.copyDirectory(file.toPath(), targetFile);
+                } else {
+                    FileUtils.copyFile(file.toPath(), targetFile);
+                }
+
+                FileUtils.writeText(infoFile, "[Trash Info]\nPath=" + file.getAbsolutePath() + "\nDeletionDate=" + time + "\n");
+                FileUtils.forceDelete(file);
+            } catch (IOException e) {
+                LOG.warning("Failed to move " + file + " to trash", e);
+                return false;
+            }
+
+            return true;
+        }
+
         try {
             java.awt.Desktop desktop = java.awt.Desktop.getDesktop();
             Method moveToTrash = desktop.getClass().getMethod("moveToTrash", File.class);
@@ -267,6 +392,10 @@ public final class FileUtils {
      * @return true if the method exists.
      */
     public static boolean isMovingToTrashSupported() {
+        if (OperatingSystem.CURRENT_OS.isLinuxOrBSD() && hasKnownDesktop()) {
+            return true;
+        }
+
         try {
             java.awt.Desktop.class.getMethod("moveToTrash", File.class);
             return true;
@@ -434,6 +563,23 @@ public final class FileUtils {
         Path tmpFile = tmpSaveFile(file);
         try (BufferedWriter writer = Files.newBufferedWriter(tmpFile, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.CREATE)) {
             writer.write(content);
+        }
+
+        try {
+            if (Files.exists(file) && Files.getAttribute(file, "dos:hidden") == Boolean.TRUE) {
+                Files.setAttribute(tmpFile, "dos:hidden", true);
+            }
+        } catch (Throwable ignored) {
+        }
+
+        Files.move(tmpFile, file, StandardCopyOption.REPLACE_EXISTING);
+    }
+
+    public static void saveSafely(Path file, ExceptionalConsumer<? super OutputStream, IOException> action) throws IOException {
+        Path tmpFile = tmpSaveFile(file);
+
+        try (OutputStream os = Files.newOutputStream(tmpFile, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.CREATE)) {
+            action.accept(os);
         }
 
         try {

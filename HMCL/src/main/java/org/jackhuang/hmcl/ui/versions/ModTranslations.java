@@ -17,16 +17,16 @@
  */
 package org.jackhuang.hmcl.ui.versions;
 
+import org.jackhuang.hmcl.mod.RemoteModRepository;
 import org.jackhuang.hmcl.util.Pair;
 import org.jackhuang.hmcl.util.StringUtils;
 import org.jackhuang.hmcl.util.io.IOUtils;
+import org.jetbrains.annotations.Nullable;
 
-import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.util.logging.Level;
 import java.util.stream.Collectors;
 
-import static org.jackhuang.hmcl.util.Logging.LOG;
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 import static org.jackhuang.hmcl.util.Pair.pair;
 
 /**
@@ -34,33 +34,70 @@ import static org.jackhuang.hmcl.util.Pair.pair;
  *
  * @see <a href="https://www.mcmod.cn">mcmod.cn</a>
  */
-public final class ModTranslations {
-    private static List<Mod> mods;
-    private static Map<String, Mod> modIdMap; // mod id -> mod
-    private static Map<String, Mod> curseForgeMap; // curseforge id -> mod
-    private static List<Pair<String, Mod>> keywords;
-    private static int maxKeywordLength = -1;
+public enum ModTranslations {
+    MOD("/assets/mod_data.txt") {
+        @Override
+        public String getMcmodUrl(Mod mod) {
+            return String.format("https://www.mcmod.cn/class/%s.html", mod.getMcmod());
+        }
+    },
+    MODPACK("/assets/modpack_data.txt") {
+        @Override
+        public String getMcmodUrl(Mod mod) {
+            return String.format("https://www.mcmod.cn/modpack/%s.html", mod.getMcmod());
+        }
+    },
+    EMPTY("") {
+        @Override
+        public String getMcmodUrl(Mod mod) {
+            return "";
+        }
+    };
 
-    private ModTranslations(){}
+    public static ModTranslations getTranslationsByRepositoryType(RemoteModRepository.Type type) {
+        switch (type) {
+            case MOD:
+                return MOD;
+            case MODPACK:
+                return MODPACK;
+            default:
+                return EMPTY;
+        }
+    }
 
-    public static Mod getModByCurseForgeId(String id) {
+    private final String resourceName;
+    private List<Mod> mods;
+    private Map<String, Mod> modIdMap; // mod id -> mod
+    private Map<String, Mod> curseForgeMap; // curseforge id -> mod
+    private List<Pair<String, Mod>> keywords;
+    private int maxKeywordLength = -1;
+
+    ModTranslations(String resourceName) {
+        this.resourceName = resourceName;
+    }
+
+    @Nullable
+    public Mod getModByCurseForgeId(String id) {
         if (StringUtils.isBlank(id) || !loadCurseForgeMap()) return null;
 
         return curseForgeMap.get(id);
     }
 
-    public static Mod getModById(String id) {
+    @Nullable
+    public Mod getModById(String id) {
         if (StringUtils.isBlank(id) || !loadModIdMap()) return null;
 
         return modIdMap.get(id);
     }
 
-    public static List<Mod> searchMod(String query) {
+    public abstract String getMcmodUrl(Mod mod);
+
+    public List<Mod> searchMod(String query) {
         if (!loadKeywords()) return Collections.emptyList();
 
-        StringBuilder newQuery = query.chars()
+        StringBuilder newQuery = ((CharSequence) query).chars()
                 .filter(ch -> !Character.isSpaceChar(ch))
-                .collect(StringBuilder::new, (sb, value) -> sb.append((char)value), StringBuilder::append);
+                .collect(StringBuilder::new, (sb, value) -> sb.append((char) value), StringBuilder::append);
         query = newQuery.toString();
 
         StringUtils.LongestCommonSubsequence lcs = new StringUtils.LongestCommonSubsequence(query.length(), maxKeywordLength);
@@ -77,19 +114,24 @@ public final class ModTranslations {
                 .collect(Collectors.toList());
     }
 
-    private static boolean loadFromResource() {
+    private boolean loadFromResource() {
         if (mods != null) return true;
+        if (StringUtils.isBlank(resourceName)) {
+            mods = Collections.emptyList();
+            return true;
+        }
+
         try {
-            String modData = IOUtils.readFullyAsString(ModTranslations.class.getResourceAsStream("/assets/mod_data.txt"), StandardCharsets.UTF_8);
+            String modData = IOUtils.readFullyAsString(ModTranslations.class.getResourceAsStream(resourceName));
             mods = Arrays.stream(modData.split("\n")).filter(line -> !line.startsWith("#")).map(Mod::new).collect(Collectors.toList());
             return true;
         } catch (Exception e) {
-            LOG.log(Level.WARNING, "Failed to load /assets/mod_data.txt", e);
+            LOG.warning("Failed to load " + resourceName, e);
             return false;
         }
     }
 
-    private static boolean loadCurseForgeMap() {
+    private boolean loadCurseForgeMap() {
         if (curseForgeMap != null) {
             return true;
         }
@@ -107,7 +149,7 @@ public final class ModTranslations {
         return true;
     }
 
-    private static boolean loadModIdMap() {
+    private boolean loadModIdMap() {
         if (modIdMap != null) {
             return true;
         }
@@ -127,7 +169,7 @@ public final class ModTranslations {
         return true;
     }
 
-    private static boolean loadKeywords() {
+    private boolean loadKeywords() {
         if (keywords != null) {
             return true;
         }
@@ -155,10 +197,9 @@ public final class ModTranslations {
         return true;
     }
 
-    public static class Mod {
+    public static final class Mod {
         private final String curseforge;
         private final String mcmod;
-        private final String mcbbs;
         private final List<String> modIds;
         private final String name;
         private final String subname;
@@ -166,23 +207,21 @@ public final class ModTranslations {
 
         public Mod(String line) {
             String[] items = line.split(";", -1);
-            if (items.length != 7) {
-                throw new IllegalArgumentException("Illegal mod data line, 7 items expected " + line);
+            if (items.length != 6) {
+                throw new IllegalArgumentException("Illegal mod data line, 6 items expected " + line);
             }
 
             curseforge = items[0];
             mcmod = items[1];
-            mcbbs = items[2];
-            modIds = Collections.unmodifiableList(Arrays.asList(items[3].split(",")));
-            name = items[4];
-            subname = items[5];
-            abbr = items[6];
+            modIds = Collections.unmodifiableList(Arrays.asList(items[2].split(",")));
+            name = items[3];
+            subname = items[4];
+            abbr = items[5];
         }
 
-        public Mod(String curseforge, String mcmod, String mcbbs, List<String> modIds, String name, String subname, String abbr) {
+        public Mod(String curseforge, String mcmod, List<String> modIds, String name, String subname, String abbr) {
             this.curseforge = curseforge;
             this.mcmod = mcmod;
-            this.mcbbs = mcbbs;
             this.modIds = modIds;
             this.name = name;
             this.subname = subname;
@@ -207,10 +246,6 @@ public final class ModTranslations {
 
         public String getMcmod() {
             return mcmod;
-        }
-
-        public String getMcbbs() {
-            return mcbbs;
         }
 
         public List<String> getModIds() {

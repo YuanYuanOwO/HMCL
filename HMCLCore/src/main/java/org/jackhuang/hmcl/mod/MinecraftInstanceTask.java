@@ -18,6 +18,7 @@
 package org.jackhuang.hmcl.mod;
 
 import org.jackhuang.hmcl.task.Task;
+import org.jackhuang.hmcl.util.DigestUtils;
 import org.jackhuang.hmcl.util.gson.JsonUtils;
 import org.jackhuang.hmcl.util.io.CompressingUtils;
 import org.jackhuang.hmcl.util.io.FileUtils;
@@ -29,28 +30,26 @@ import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.List;
-
-import static org.jackhuang.hmcl.util.DigestUtils.digest;
-import static org.jackhuang.hmcl.util.Hex.encodeHex;
+import java.util.stream.Collectors;
 
 public final class MinecraftInstanceTask<T> extends Task<ModpackConfiguration<T>> {
 
     private final File zipFile;
     private final Charset encoding;
-    private final String subDirectory;
+    private final List<String> subDirectories;
     private final File jsonFile;
     private final T manifest;
     private final String type;
     private final String name;
     private final String version;
 
-    public MinecraftInstanceTask(File zipFile, Charset encoding, String subDirectory, T manifest, String type, String name, String version, File jsonFile) {
+    public MinecraftInstanceTask(File zipFile, Charset encoding, List<String> subDirectories, T manifest, ModpackProvider modpackProvider, String name, String version, File jsonFile) {
         this.zipFile = zipFile;
         this.encoding = encoding;
-        this.subDirectory = FileUtils.normalizePath(subDirectory);
+        this.subDirectories = subDirectories.stream().map(FileUtils::normalizePath).collect(Collectors.toList());
         this.manifest = manifest;
         this.jsonFile = jsonFile;
-        this.type = type;
+        this.type = modpackProvider.getName();
         this.name = name;
         this.version = version;
     }
@@ -60,17 +59,19 @@ public final class MinecraftInstanceTask<T> extends Task<ModpackConfiguration<T>
         List<ModpackConfiguration.FileInformation> overrides = new ArrayList<>();
 
         try (FileSystem fs = CompressingUtils.readonly(zipFile.toPath()).setEncoding(encoding).build()) {
-            Path root = fs.getPath(subDirectory);
+            for (String subDirectory : subDirectories) {
+                Path root = fs.getPath(subDirectory);
 
-            if (Files.exists(root))
-                Files.walkFileTree(root, new SimpleFileVisitor<Path>() {
-                    @Override
-                    public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-                        String relativePath = root.relativize(file).normalize().toString().replace(File.separatorChar, '/');
-                        overrides.add(new ModpackConfiguration.FileInformation(relativePath, encodeHex(digest("SHA-1", file))));
-                        return FileVisitResult.CONTINUE;
-                    }
-                });
+                if (Files.exists(root))
+                    Files.walkFileTree(root, new SimpleFileVisitor<Path>() {
+                        @Override
+                        public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                            String relativePath = root.relativize(file).normalize().toString().replace(File.separatorChar, '/');
+                            overrides.add(new ModpackConfiguration.FileInformation(relativePath, DigestUtils.digestToString("SHA-1", file)));
+                            return FileVisitResult.CONTINUE;
+                        }
+                    });
+            }
         }
 
         ModpackConfiguration<T> configuration = new ModpackConfiguration<>(manifest, type, name, version, overrides);

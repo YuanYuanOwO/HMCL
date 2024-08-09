@@ -52,6 +52,10 @@ public enum OperatingSystem {
      */
     OSX("osx"),
     /**
+     * FreeBSD.
+     */
+    FREEBSD("freebsd"),
+    /**
      * Unknown operating system.
      */
     UNKNOWN("universal");
@@ -64,6 +68,10 @@ public enum OperatingSystem {
 
     public String getCheckedName() {
         return checkedName;
+    }
+
+    public boolean isLinuxOrBSD() {
+        return this == LINUX || this == FREEBSD;
     }
 
     /**
@@ -176,8 +184,7 @@ public enum OperatingSystem {
         }
 
         TOTAL_MEMORY = getPhysicalMemoryStatus()
-                .map(PhysicalMemoryStatus::getTotal)
-                .map(bytes -> (int) (bytes / 1024 / 1024))
+                .map(physicalMemoryStatus -> (int) (physicalMemoryStatus.getTotal() / 1024 / 1024))
                 .orElse(1024);
 
         SUGGESTED_MEMORY = TOTAL_MEMORY >= 32768 ? 8192 : (int) (Math.round(1.0 * TOTAL_MEMORY / 4.0 / 128.0) * 128);
@@ -214,10 +221,37 @@ public enum OperatingSystem {
             return OSX;
         else if (name.contains("solaris") || name.contains("linux") || name.contains("unix") || name.contains("sunos"))
             return LINUX;
+        else if (name.equals("freebsd"))
+            return FREEBSD;
         else
             return UNKNOWN;
     }
 
+    public static boolean isWindows7OrLater() {
+        if (CURRENT_OS != WINDOWS) {
+            return false;
+        }
+
+        int major;
+        int dotIndex = SYSTEM_VERSION.indexOf('.');
+        try {
+            if (dotIndex < 0) {
+                major = Integer.parseInt(SYSTEM_VERSION);
+            } else {
+                major = Integer.parseInt(SYSTEM_VERSION.substring(0, dotIndex));
+            }
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
+
+        // Windows XP:      NT 5.1~5.2
+        // Windows Vista:   NT 6.0
+        // Windows 7:       NT 6.1
+
+        return major >= 6 && !SYSTEM_VERSION.startsWith("6.0");
+    }
+
+    @SuppressWarnings("deprecation")
     public static Optional<PhysicalMemoryStatus> getPhysicalMemoryStatus() {
         if (CURRENT_OS == LINUX) {
             try {
@@ -246,16 +280,20 @@ public enum OperatingSystem {
             }
         }
 
-        java.lang.management.OperatingSystemMXBean bean = java.lang.management.ManagementFactory.getOperatingSystemMXBean();
-        if (bean instanceof com.sun.management.OperatingSystemMXBean) {
-            com.sun.management.OperatingSystemMXBean sunBean =
-                    (com.sun.management.OperatingSystemMXBean)
-                            java.lang.management.ManagementFactory.getOperatingSystemMXBean();
-            return Optional.of(new PhysicalMemoryStatus(sunBean.getTotalPhysicalMemorySize(), sunBean.getFreePhysicalMemorySize()));
+        try {
+            java.lang.management.OperatingSystemMXBean bean = java.lang.management.ManagementFactory.getOperatingSystemMXBean();
+            if (bean instanceof com.sun.management.OperatingSystemMXBean) {
+                com.sun.management.OperatingSystemMXBean sunBean =
+                        (com.sun.management.OperatingSystemMXBean)
+                                java.lang.management.ManagementFactory.getOperatingSystemMXBean();
+                return Optional.of(new PhysicalMemoryStatus(sunBean.getTotalPhysicalMemorySize(), sunBean.getFreePhysicalMemorySize()));
+            }
+        } catch (NoClassDefFoundError ignored) {
         }
         return Optional.empty();
     }
 
+    @SuppressWarnings("removal")
     public static void forceGC() {
         System.gc();
         try {
@@ -269,14 +307,15 @@ public enum OperatingSystem {
         String home = System.getProperty("user.home", ".");
         switch (OperatingSystem.CURRENT_OS) {
             case LINUX:
-                return Paths.get(home, "." + folder);
+            case FREEBSD:
+                return Paths.get(home, "." + folder).toAbsolutePath();
             case WINDOWS:
                 String appdata = System.getenv("APPDATA");
-                return Paths.get(appdata == null ? home : appdata, "." + folder);
+                return Paths.get(appdata == null ? home : appdata, "." + folder).toAbsolutePath();
             case OSX:
-                return Paths.get(home, "Library", "Application Support", folder);
+                return Paths.get(home, "Library", "Application Support", folder).toAbsolutePath();
             default:
-                return Paths.get(home, folder);
+                return Paths.get(home, folder).toAbsolutePath();
         }
     }
 
@@ -306,9 +345,9 @@ public enum OperatingSystem {
             int dot = name.indexOf('.');
             // on windows, filename suffixes are not relevant to name validity
             String basename = dot == -1 ? name : name.substring(0, dot);
-            if (Arrays.binarySearch(INVALID_RESOURCE_BASENAMES, basename.toLowerCase()) >= 0)
+            if (Arrays.binarySearch(INVALID_RESOURCE_BASENAMES, basename.toLowerCase(Locale.ROOT)) >= 0)
                 return false;
-            if (Arrays.binarySearch(INVALID_RESOURCE_FULLNAMES, name.toLowerCase()) >= 0)
+            if (Arrays.binarySearch(INVALID_RESOURCE_FULLNAMES, name.toLowerCase(Locale.ROOT)) >= 0)
                 return false;
             if (INVALID_RESOURCE_CHARACTERS.matcher(name).find())
                 return false;

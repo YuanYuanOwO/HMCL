@@ -21,7 +21,9 @@ import org.jackhuang.hmcl.download.forge.ForgeInstallTask;
 import org.jackhuang.hmcl.download.game.GameAssetDownloadTask;
 import org.jackhuang.hmcl.download.game.GameDownloadTask;
 import org.jackhuang.hmcl.download.game.GameLibrariesTask;
+import org.jackhuang.hmcl.download.neoforge.NeoForgeInstallTask;
 import org.jackhuang.hmcl.download.optifine.OptiFineInstallTask;
+import org.jackhuang.hmcl.game.Artifact;
 import org.jackhuang.hmcl.game.DefaultGameRepository;
 import org.jackhuang.hmcl.game.Library;
 import org.jackhuang.hmcl.game.Version;
@@ -32,10 +34,9 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
-
-import static org.jackhuang.hmcl.download.LibraryAnalyzer.LibraryType.OPTIFINE;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Note: This class has no state.
@@ -75,8 +76,7 @@ public class DefaultDependencyManager extends AbstractDependencyManager {
     }
 
     @Override
-    public Task<?> checkGameCompletionAsync(Version original, boolean integrityCheck) {
-        Version version = original.resolve(repository);
+    public Task<?> checkGameCompletionAsync(Version version, boolean integrityCheck) {
         return Task.allOf(
                 Task.composeAsync(() -> {
                     File versionJar = repository.getVersionJar(version);
@@ -84,7 +84,7 @@ public class DefaultDependencyManager extends AbstractDependencyManager {
                         return new GameDownloadTask(this, null, version);
                     else
                         return null;
-                }),
+                }).thenComposeAsync(checkPatchCompletionAsync(version, integrityCheck)),
                 new GameAssetDownloadTask(this, version, GameAssetDownloadTask.DOWNLOAD_INDEX_IF_NECESSARY, integrityCheck),
                 new GameLibrariesTask(this, version, integrityCheck)
         );
@@ -98,31 +98,49 @@ public class DefaultDependencyManager extends AbstractDependencyManager {
     @Override
     public Task<?> checkPatchCompletionAsync(Version version, boolean integrityCheck) {
         return Task.composeAsync(() -> {
-            List<Task<?>> tasks = new ArrayList<>();
+            List<Task<?>> tasks = new ArrayList<>(0);
 
-            Optional<String> gameVersion = repository.getGameVersion(version);
-            if (!gameVersion.isPresent()) return null;
+            String gameVersion = repository.getGameVersion(version).orElse(null);
+            if (gameVersion == null) return null;
 
-            LibraryAnalyzer analyzer = LibraryAnalyzer.analyze(version.resolvePreservingPatches(getGameRepository()));
+            Version original = repository.getVersion(version.getId());
+            Version resolved = original.resolvePreservingPatches(repository);
+
+            LibraryAnalyzer analyzer = LibraryAnalyzer.analyze(resolved, gameVersion);
             for (LibraryAnalyzer.LibraryType type : LibraryAnalyzer.LibraryType.values()) {
-                Optional<Library> library = analyzer.getLibrary(type);
-                if (library.isPresent() && GameLibrariesTask.shouldDownloadLibrary(repository, version, library.get(), integrityCheck)) {
-                    tasks.add(downloadMissingLibraryAsync(gameVersion.get(), version, type, library.get()));
+                if (!analyzer.has(type))
+                    continue;
+
+                if (type == LibraryAnalyzer.LibraryType.OPTIFINE) {
+                    String optifinePatchVersion = analyzer.getVersion(type)
+                            .map(optifineVersion -> {
+                                Matcher matcher = Pattern.compile("^([0-9.]+)_(?<optifine>HD_.+)$").matcher(optifineVersion);
+                                return matcher.find() ? matcher.group("optifine") : optifineVersion;
+                            })
+                            .orElseGet(() -> resolved.getPatches().stream()
+                                    .filter(patch -> "optifine".equals(patch.getId()))
+                                    .findAny()
+                                    .map(Version::getVersion)
+                                    .orElse(null));
+
+                    boolean needsReInstallation = version.getLibraries().stream()
+                            .anyMatch(library -> !library.hasDownloadURL()
+                                    && "optifine".equals(library.getGroupId())
+                                    && GameLibrariesTask.shouldDownloadLibrary(repository, version, library, integrityCheck));
+
+                    if (needsReInstallation) {
+                        Library installer = new Library(new Artifact("optifine", "OptiFine", gameVersion + "_" + optifinePatchVersion, "installer"));
+                        if (GameLibrariesTask.shouldDownloadLibrary(repository, version, installer, integrityCheck)) {
+                            tasks.add(installLibraryAsync(gameVersion, original, "optifine", optifinePatchVersion));
+                        } else {
+                            tasks.add(OptiFineInstallTask.install(this, original, repository.getLibraryFile(version, installer).toPath()));
+                        }
+                    }
                 }
             }
+
             return Task.allOf(tasks);
         });
-    }
-
-    private Task<?> downloadMissingLibraryAsync(String gameVersion, Version version, LibraryAnalyzer.LibraryType libraryType, Library library) {
-        switch (libraryType) {
-            case OPTIFINE:
-                if (library.hasDownloadURL())
-                    break;
-
-                return installLibraryAsync(gameVersion, version, libraryType.getPatchId(), library.getVersion());
-        }
-        return Task.completed(null);
     }
 
     @Override
@@ -163,6 +181,11 @@ public class DefaultDependencyManager extends AbstractDependencyManager {
         return Task
                 .composeAsync(() -> {
                     try {
+                        return NeoForgeInstallTask.install(this, oldVersion, installer);
+                    } catch (IOException ignore) {
+                    }
+
+                    try {
                         return ForgeInstallTask.install(this, oldVersion, installer);
                     } catch (IOException ignore) {
                     }
@@ -195,8 +218,9 @@ public class DefaultDependencyManager extends AbstractDependencyManager {
         if (version.isResolved())
             throw new IllegalArgumentException("removeLibraryWithoutSavingAsync requires non-resolved version");
         Version independentVersion = version.resolvePreservingPatches(repository);
+        String gameVersion = repository.getGameVersion(independentVersion).orElse(null);
 
-        return Task.supplyAsync(() -> LibraryAnalyzer.analyze(independentVersion).removeLibrary(libraryId).build());
+        return Task.supplyAsync(() -> LibraryAnalyzer.analyze(independentVersion, gameVersion).removeLibrary(libraryId).build());
     }
 
 }

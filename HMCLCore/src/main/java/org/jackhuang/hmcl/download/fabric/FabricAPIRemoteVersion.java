@@ -17,7 +17,9 @@
  */
 package org.jackhuang.hmcl.download.fabric;
 
-import org.jackhuang.hmcl.download.*;
+import org.jackhuang.hmcl.download.DefaultDependencyManager;
+import org.jackhuang.hmcl.download.LibraryAnalyzer;
+import org.jackhuang.hmcl.download.RemoteVersion;
 import org.jackhuang.hmcl.game.Version;
 import org.jackhuang.hmcl.mod.RemoteMod;
 import org.jackhuang.hmcl.task.Task;

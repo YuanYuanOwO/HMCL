@@ -29,7 +29,6 @@ import org.jackhuang.hmcl.ui.Controllers;
 import org.jackhuang.hmcl.ui.FXUtils;
 import org.jackhuang.hmcl.ui.ListPageBase;
 import org.jackhuang.hmcl.ui.decorator.DecoratorPage;
-import org.jackhuang.hmcl.util.Logging;
 import org.jackhuang.hmcl.util.io.FileUtils;
 import org.jackhuang.hmcl.util.javafx.MappedObservableList;
 
@@ -38,8 +37,8 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Objects;
-import java.util.logging.Level;
 
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 import static org.jackhuang.hmcl.util.i18n.I18n.i18n;
 
 public class DatapackListPage extends ListPageBase<DatapackListPageSkin.DatapackInfoObject> implements DecoratorPage {
@@ -47,6 +46,8 @@ public class DatapackListPage extends ListPageBase<DatapackListPageSkin.Datapack
     private final Path worldDir;
     private final Datapack datapack;
 
+    // Strongly referencing items, preventing GC collection
+    @SuppressWarnings("FieldCanBeLocal")
     private final ObservableList<DatapackListPageSkin.DatapackInfoObject> items;
 
     public DatapackListPage(String worldName, Path worldDir) {
@@ -69,7 +70,7 @@ public class DatapackListPage extends ListPageBase<DatapackListPageSkin.Datapack
             zip.loadFromZip();
             zip.installTo(worldDir);
         } catch (IOException | IllegalArgumentException e) {
-            Logging.LOG.log(Level.WARNING, "Unable to parse datapack file " + datapack, e);
+            LOG.warning("Unable to parse datapack file " + datapack, e);
         }
     }
 
@@ -84,7 +85,7 @@ public class DatapackListPage extends ListPageBase<DatapackListPageSkin.Datapack
                 .withRunAsync(Schedulers.javafx(), () -> {
                     setLoading(false);
 
-                    // https://github.com/huanghongxun/HMCL/issues/938
+                    // https://github.com/HMCL-dev/HMCL/issues/938
                     System.gc();
                 })
                 .start();
@@ -115,7 +116,7 @@ public class DatapackListPage extends ListPageBase<DatapackListPageSkin.Datapack
                         datapack.deletePack(pack);
                     } catch (IOException e) {
                         // Fail to remove mods if the game is running or the datapack is absent.
-                        Logging.LOG.warning("Failed to delete datapack " + pack);
+                        LOG.warning("Failed to delete datapack " + pack);
                     }
                 });
     }

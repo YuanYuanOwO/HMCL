@@ -17,7 +17,7 @@
  */
 package org.jackhuang.hmcl.task;
 
-import org.jackhuang.hmcl.util.Logging;
+import org.jackhuang.hmcl.util.Hex;
 import org.jackhuang.hmcl.util.io.ChecksumMismatchException;
 import org.jackhuang.hmcl.util.io.CompressingUtils;
 import org.jackhuang.hmcl.util.io.FileUtils;
@@ -25,7 +25,6 @@ import org.jackhuang.hmcl.util.io.FileUtils;
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
-import java.math.BigInteger;
 import java.net.URL;
 import java.net.URLConnection;
 import java.nio.file.FileSystem;
@@ -33,10 +32,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.*;
-import java.util.logging.Level;
 
 import static java.util.Objects.requireNonNull;
 import static org.jackhuang.hmcl.util.DigestUtils.getDigest;
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 /**
  * A task that can download a file online.
@@ -72,7 +71,7 @@ public class FileDownloadTask extends FetchTask<Void> {
         }
 
         public void performCheck(MessageDigest digest) throws ChecksumMismatchException {
-            String actualChecksum = String.format("%1$040x", new BigInteger(1, digest.digest()));
+            String actualChecksum = Hex.encodeHex(digest.digest());
             if (!checksum.equalsIgnoreCase(actualChecksum)) {
                 throw new ChecksumMismatchException(algorithm, checksum, actualChecksum);
             }
@@ -166,10 +165,10 @@ public class FileDownloadTask extends FetchTask<Void> {
             if (cache.isPresent()) {
                 try {
                     FileUtils.copyFile(cache.get().toFile(), file);
-                    Logging.LOG.log(Level.FINER, "Successfully verified file " + file + " from " + urls.get(0));
+                    LOG.trace("Successfully verified file " + file + " from " + urls.get(0));
                     return EnumCheckETag.CACHED;
                 } catch (IOException e) {
-                    Logging.LOG.log(Level.WARNING, "Failed to copy cache files", e);
+                    LOG.warning("Failed to copy cache files", e);
                 }
             }
             return EnumCheckETag.NOT_CHECK_E_TAG;
@@ -180,7 +179,7 @@ public class FileDownloadTask extends FetchTask<Void> {
 
     @Override
     protected void beforeDownload(URL url) {
-        Logging.LOG.log(Level.FINER, "Downloading " + url + " to " + file);
+        LOG.trace("Downloading " + url + " to " + file);
     }
 
     @Override
@@ -209,14 +208,14 @@ public class FileDownloadTask extends FetchTask<Void> {
                 try {
                     rFile.close();
                 } catch (IOException e) {
-                    Logging.LOG.log(Level.WARNING, "Failed to close file: " + rFile, e);
+                    LOG.warning("Failed to close file: " + rFile, e);
                 }
 
                 if (!isSuccess()) {
                     try {
                         Files.delete(temp);
                     } catch (IOException e) {
-                        Logging.LOG.log(Level.WARNING, "Failed to delete file: " + rFile, e);
+                        LOG.warning("Failed to delete file: " + rFile, e);
                     }
                     return;
                 }
@@ -244,7 +243,7 @@ public class FileDownloadTask extends FetchTask<Void> {
                     try {
                         repository.cacheFile(file.toPath(), integrityCheck.getAlgorithm(), integrityCheck.getChecksum());
                     } catch (IOException e) {
-                        Logging.LOG.log(Level.WARNING, "Failed to cache file", e);
+                        LOG.warning("Failed to cache file", e);
                     }
                 }
 
@@ -266,7 +265,7 @@ public class FileDownloadTask extends FetchTask<Void> {
     }
 
     public static final IntegrityCheckHandler ZIP_INTEGRITY_CHECK_HANDLER = (filePath, destinationPath) -> {
-        String ext = FileUtils.getExtension(destinationPath).toLowerCase();
+        String ext = FileUtils.getExtension(destinationPath).toLowerCase(Locale.ROOT);
         if (ext.equals("zip") || ext.equals("jar")) {
             try (FileSystem ignored = CompressingUtils.createReadOnlyZipFileSystem(filePath)) {
                 // test for zip format

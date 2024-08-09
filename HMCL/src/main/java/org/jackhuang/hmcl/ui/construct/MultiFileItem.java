@@ -28,7 +28,6 @@ import javafx.scene.Node;
 import javafx.scene.control.Label;
 import javafx.scene.control.Toggle;
 import javafx.scene.control.ToggleGroup;
-import javafx.scene.control.Tooltip;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.FileChooser;
@@ -41,7 +40,7 @@ import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
-public class MultiFileItem<T> extends VBox {
+public final class MultiFileItem<T> extends VBox {
     private final ObjectProperty<T> selectedData = new SimpleObjectProperty<>(this, "selectedData");
     private final ObjectProperty<T> fallbackData = new SimpleObjectProperty<>(this, "fallbackData");
 
@@ -165,27 +164,20 @@ public class MultiFileItem<T> extends VBox {
             pane.setLeft(left);
 
             if (StringUtils.isNotBlank(subtitle)) {
-                Optional<String> shortSubtitle = StringUtils.truncate(subtitle);
-                Label right;
-                if (shortSubtitle.isPresent()) {
-                    right = new Label(shortSubtitle.get());
-                    right.setTooltip(new Tooltip(subtitle));
-                } else {
-                    right = new Label(subtitle);
-                }
-                BorderPane.setAlignment(right, Pos.CENTER_RIGHT);
-                right.setWrapText(true);
-                right.getStyleClass().add("subtitle-label");
-                right.setStyle("-fx-font-size: 10;");
-                pane.setRight(right);
+                Label center = new Label(subtitle);
+                BorderPane.setAlignment(center, Pos.CENTER_RIGHT);
+                center.setWrapText(true);
+                center.getStyleClass().add("subtitle-label");
+                center.setStyle("-fx-font-size: 10;");
+                pane.setCenter(center);
             }
 
             return pane;
         }
     }
 
-    public static class StringOption<T> extends Option<T> {
-        private JFXTextField customField = new JFXTextField();
+    public static final class StringOption<T> extends Option<T> {
+        private final JFXTextField customField = new JFXTextField();
 
         public StringOption(String title, T data) {
             super(title, data);
@@ -204,7 +196,7 @@ public class MultiFileItem<T> extends VBox {
         }
 
         public StringOption<T> bindBidirectional(Property<String> property) {
-            customField.textProperty().bindBidirectional(property);
+            FXUtils.bindString(customField, property);
             return this;
         }
 
@@ -238,8 +230,8 @@ public class MultiFileItem<T> extends VBox {
         }
     }
 
-    public static class FileOption<T> extends Option<T> {
-        private FileSelector selector = new FileSelector();
+    public static final class FileOption<T> extends Option<T> {
+        private final FileSelector selector = new FileSelector();
 
         public FileOption(String title, T data) {
             super(title, data);

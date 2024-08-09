@@ -17,15 +17,9 @@
  */
 package org.jackhuang.hmcl.ui.download;
 
-import com.jfoenix.controls.JFXButton;
-import com.jfoenix.controls.JFXTextField;
 import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.SimpleBooleanProperty;
-import javafx.fxml.FXML;
-import javafx.scene.control.Label;
-import javafx.scene.layout.Region;
-import javafx.scene.layout.StackPane;
 import javafx.stage.FileChooser;
 import org.jackhuang.hmcl.game.HMCLGameRepository;
 import org.jackhuang.hmcl.game.ManuallyCreatedModpackException;
@@ -39,10 +33,8 @@ import org.jackhuang.hmcl.ui.Controllers;
 import org.jackhuang.hmcl.ui.FXUtils;
 import org.jackhuang.hmcl.ui.construct.MessageDialogPane;
 import org.jackhuang.hmcl.ui.construct.RequiredValidator;
-import org.jackhuang.hmcl.ui.construct.SpinnerPane;
 import org.jackhuang.hmcl.ui.construct.Validator;
 import org.jackhuang.hmcl.ui.wizard.WizardController;
-import org.jackhuang.hmcl.ui.wizard.WizardPage;
 import org.jackhuang.hmcl.util.io.CompressingUtils;
 import org.jackhuang.hmcl.util.io.FileUtils;
 
@@ -50,53 +42,21 @@ import java.io.File;
 import java.nio.charset.Charset;
 import java.util.Map;
 import java.util.Optional;
-import java.util.logging.Level;
 
-import static javafx.beans.binding.Bindings.createBooleanBinding;
 import static org.jackhuang.hmcl.util.Lang.tryCast;
-import static org.jackhuang.hmcl.util.Logging.LOG;
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 import static org.jackhuang.hmcl.util.i18n.I18n.i18n;
 
-public final class LocalModpackPage extends StackPane implements WizardPage {
-    private final WizardController controller;
-
-    private Modpack manifest = null;
-
-    @FXML
-    private Region borderPane;
-
-    @FXML
-    private Label lblName;
-
-    @FXML
-    private Label lblVersion;
-
-    @FXML
-    private Label lblAuthor;
-
-    @FXML
-    private Label lblModpackLocation;
-
-    @FXML
-    private JFXTextField txtModpackName;
-
-    @FXML
-    private JFXButton btnInstall;
-
-    @FXML
-    private SpinnerPane spinnerPane;
+public final class LocalModpackPage extends ModpackPage {
 
     private final BooleanProperty installAsVersion = new SimpleBooleanProperty(true);
+    private Modpack manifest = null;
     private Charset charset;
 
     public LocalModpackPage(WizardController controller) {
-        this.controller = controller;
-
-        FXUtils.loadFXML(this, "/assets/fxml/download/modpack.fxml");
+        super(controller);
 
         Profile profile = (Profile) controller.getSettings().get("PROFILE");
-
-        File selectedFile;
 
         Optional<String> name = tryCast(controller.getSettings().get(MODPACK_NAME), String.class);
         if (name.isPresent()) {
@@ -116,12 +76,9 @@ public final class LocalModpackPage extends StackPane implements WizardPage {
                             new Validator(i18n("install.new_game.malformed"), HMCLGameRepository::isValidVersionId));
                 }
             });
-
-            btnInstall.disableProperty().bind(
-                    createBooleanBinding(txtModpackName::validate, txtModpackName.textProperty())
-                            .not());
         }
 
+        File selectedFile;
         Optional<File> filePath = tryCast(controller.getSettings().get(MODPACK_FILE), File.class);
         if (filePath.isPresent()) {
             selectedFile = filePath.get();
@@ -138,7 +95,7 @@ public final class LocalModpackPage extends StackPane implements WizardPage {
             controller.getSettings().put(MODPACK_FILE, selectedFile);
         }
 
-        spinnerPane.showSpinner();
+        showSpinner();
         Task.supplyAsync(() -> CompressingUtils.findSuitableEncoding(selectedFile.toPath()))
                 .thenApplyAsync(encoding -> {
                     charset = encoding;
@@ -147,13 +104,13 @@ public final class LocalModpackPage extends StackPane implements WizardPage {
                 })
                 .whenComplete(Schedulers.javafx(), (manifest, exception) -> {
                     if (exception instanceof ManuallyCreatedModpackException) {
-                        spinnerPane.hideSpinner();
+                        hideSpinner();
                         lblName.setText(selectedFile.getName());
                         installAsVersion.set(false);
                         lblModpackLocation.setText(selectedFile.getAbsolutePath());
 
                         if (!name.isPresent()) {
-                            // trim: https://github.com/huanghongxun/HMCL/issues/962
+                            // trim: https://github.com/HMCL-dev/HMCL/issues/962
                             txtModpackName.setText(FileUtils.getNameWithoutExtension(selectedFile));
                         }
 
@@ -163,11 +120,11 @@ public final class LocalModpackPage extends StackPane implements WizardPage {
 
                         controller.getSettings().put(MODPACK_MANUALLY_CREATED, true);
                     } else if (exception != null) {
-                        LOG.log(Level.WARNING, "Failed to read modpack manifest", exception);
+                        LOG.warning("Failed to read modpack manifest", exception);
                         Controllers.dialog(i18n("modpack.task.install.error"), i18n("message.error"), MessageDialogPane.MessageType.ERROR);
                         Platform.runLater(controller::onEnd);
                     } else {
-                        spinnerPane.hideSpinner();
+                        hideSpinner();
                         controller.getSettings().put(MODPACK_MANIFEST, manifest);
                         lblName.setText(manifest.getName());
                         lblVersion.setText(manifest.getVersion());
@@ -176,7 +133,7 @@ public final class LocalModpackPage extends StackPane implements WizardPage {
                         lblModpackLocation.setText(selectedFile.getAbsolutePath());
 
                         if (!name.isPresent()) {
-                            // trim: https://github.com/huanghongxun/HMCL/issues/962
+                            // trim: https://github.com/HMCL-dev/HMCL/issues/962
                             txtModpackName.setText(manifest.getName().trim());
                         }
                     }
@@ -188,24 +145,17 @@ public final class LocalModpackPage extends StackPane implements WizardPage {
         settings.remove(MODPACK_FILE);
     }
 
-    @FXML
-    private void onInstall() {
+    protected void onInstall() {
         if (!txtModpackName.validate()) return;
         controller.getSettings().put(MODPACK_NAME, txtModpackName.getText());
         controller.getSettings().put(MODPACK_CHARSET, charset);
         controller.onFinish();
     }
 
-    @FXML
-    private void onDescribe() {
+    protected void onDescribe() {
         if (manifest != null) {
             FXUtils.showWebDialog(i18n("modpack.description"), manifest.getDescription());
         }
-    }
-
-    @Override
-    public String getTitle() {
-        return i18n("modpack.task.install");
     }
 
     public static final String MODPACK_FILE = "MODPACK_FILE";

@@ -17,11 +17,12 @@
  */
 package org.jackhuang.hmcl.setting;
 
+import com.google.gson.reflect.TypeToken;
+import javafx.beans.InvalidationListener;
 import javafx.beans.Observable;
 import javafx.beans.property.ObjectProperty;
-import javafx.beans.property.ReadOnlyListProperty;
-import javafx.beans.property.ReadOnlyListWrapper;
 import javafx.beans.property.SimpleObjectProperty;
+import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import org.jackhuang.hmcl.Metadata;
 import org.jackhuang.hmcl.auth.*;
@@ -32,19 +33,20 @@ import org.jackhuang.hmcl.auth.microsoft.MicrosoftService;
 import org.jackhuang.hmcl.auth.offline.OfflineAccount;
 import org.jackhuang.hmcl.auth.offline.OfflineAccountFactory;
 import org.jackhuang.hmcl.auth.yggdrasil.RemoteAuthenticationException;
-import org.jackhuang.hmcl.auth.yggdrasil.YggdrasilAccount;
-import org.jackhuang.hmcl.auth.yggdrasil.YggdrasilAccountFactory;
 import org.jackhuang.hmcl.game.OAuthServer;
 import org.jackhuang.hmcl.task.Schedulers;
+import org.jackhuang.hmcl.util.InvocationDispatcher;
+import org.jackhuang.hmcl.util.Lang;
+import org.jackhuang.hmcl.util.io.FileUtils;
 import org.jackhuang.hmcl.util.skin.InvalidSkinException;
 
+import javax.net.ssl.SSLException;
 import java.io.IOException;
+import java.io.Reader;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.logging.Level;
+import java.util.*;
 
 import static java.util.stream.Collectors.toList;
 import static javafx.collections.FXCollections.observableArrayList;
@@ -52,24 +54,26 @@ import static org.jackhuang.hmcl.setting.ConfigHolder.config;
 import static org.jackhuang.hmcl.ui.FXUtils.onInvalidating;
 import static org.jackhuang.hmcl.util.Lang.immutableListOf;
 import static org.jackhuang.hmcl.util.Lang.mapOf;
-import static org.jackhuang.hmcl.util.Logging.LOG;
 import static org.jackhuang.hmcl.util.Pair.pair;
 import static org.jackhuang.hmcl.util.i18n.I18n.i18n;
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 /**
  * @author huangyuhui
  */
 public final class Accounts {
-    private Accounts() {}
+    private Accounts() {
+    }
 
     private static final AuthlibInjectorArtifactProvider AUTHLIB_INJECTOR_DOWNLOADER = createAuthlibInjectorArtifactProvider();
+
     private static void triggerAuthlibInjectorUpdateCheck() {
         if (AUTHLIB_INJECTOR_DOWNLOADER instanceof AuthlibInjectorDownloader) {
             Schedulers.io().execute(() -> {
                 try {
                     ((AuthlibInjectorDownloader) AUTHLIB_INJECTOR_DOWNLOADER).checkUpdate();
                 } catch (IOException e) {
-                    LOG.log(Level.WARNING, "Failed to check update for authlib-injector", e);
+                    LOG.warning("Failed to check update for authlib-injector", e);
                 }
             });
         }
@@ -78,17 +82,16 @@ public final class Accounts {
     public static final OAuthServer.Factory OAUTH_CALLBACK = new OAuthServer.Factory();
 
     public static final OfflineAccountFactory FACTORY_OFFLINE = new OfflineAccountFactory(AUTHLIB_INJECTOR_DOWNLOADER);
-    public static final YggdrasilAccountFactory FACTORY_MOJANG = YggdrasilAccountFactory.MOJANG;
     public static final AuthlibInjectorAccountFactory FACTORY_AUTHLIB_INJECTOR = new AuthlibInjectorAccountFactory(AUTHLIB_INJECTOR_DOWNLOADER, Accounts::getOrCreateAuthlibInjectorServer);
     public static final MicrosoftAccountFactory FACTORY_MICROSOFT = new MicrosoftAccountFactory(new MicrosoftService(OAUTH_CALLBACK));
-    public static final List<AccountFactory<?>> FACTORIES = immutableListOf(FACTORY_OFFLINE, FACTORY_MOJANG, FACTORY_MICROSOFT, FACTORY_AUTHLIB_INJECTOR);
+    public static final List<AccountFactory<?>> FACTORIES = immutableListOf(FACTORY_OFFLINE, FACTORY_MICROSOFT, FACTORY_AUTHLIB_INJECTOR);
 
     // ==== login type / account factory mapping ====
     private static final Map<String, AccountFactory<?>> type2factory = new HashMap<>();
     private static final Map<AccountFactory<?>, String> factory2type = new HashMap<>();
+
     static {
         type2factory.put("offline", FACTORY_OFFLINE);
-        type2factory.put("yggdrasil", FACTORY_MOJANG);
         type2factory.put("authlibInjector", FACTORY_AUTHLIB_INJECTOR);
         type2factory.put("microsoft", FACTORY_MICROSOFT);
 
@@ -96,13 +99,23 @@ public final class Accounts {
     }
 
     public static String getLoginType(AccountFactory<?> factory) {
-        return Optional.ofNullable(factory2type.get(factory))
-                .orElseThrow(() -> new IllegalArgumentException("Unrecognized account factory"));
+        String type = factory2type.get(factory);
+        if (type != null) return type;
+
+        if (factory instanceof BoundAuthlibInjectorAccountFactory) {
+            return factory2type.get(FACTORY_AUTHLIB_INJECTOR);
+        }
+
+        throw new IllegalArgumentException("Unrecognized account factory");
     }
 
     public static AccountFactory<?> getAccountFactory(String loginType) {
         return Optional.ofNullable(type2factory.get(loginType))
                 .orElseThrow(() -> new IllegalArgumentException("Unrecognized login type"));
+    }
+
+    public static BoundAuthlibInjectorAccountFactory getAccountFactoryByAuthlibInjectorServer(AuthlibInjectorServer server) {
+        return new BoundAuthlibInjectorAccountFactory(AUTHLIB_INJECTOR_DOWNLOADER, server);
     }
     // ====
 
@@ -111,67 +124,26 @@ public final class Accounts {
             return FACTORY_OFFLINE;
         else if (account instanceof AuthlibInjectorAccount)
             return FACTORY_AUTHLIB_INJECTOR;
-        else if (account instanceof YggdrasilAccount)
-            return FACTORY_MOJANG;
         else if (account instanceof MicrosoftAccount)
             return FACTORY_MICROSOFT;
         else
             throw new IllegalArgumentException("Failed to determine account type: " + account);
     }
 
-    private static ObservableList<Account> accounts = observableArrayList(account -> new Observable[] { account });
-    private static ReadOnlyListWrapper<Account> accountsWrapper = new ReadOnlyListWrapper<>(Accounts.class, "accounts", accounts);
+    private static final String GLOBAL_PREFIX = "$GLOBAL:";
+    private static final ObservableList<Map<Object, Object>> globalAccountStorages = FXCollections.observableArrayList();
 
-    private static ObjectProperty<Account> selectedAccount = new SimpleObjectProperty<Account>(Accounts.class, "selectedAccount") {
-        {
-            accounts.addListener(onInvalidating(this::invalidated));
-        }
-
-        @Override
-        protected void invalidated() {
-            // this methods first checks whether the current selection is valid
-            // if it's valid, the underlying storage will be updated
-            // otherwise, the first account will be selected as an alternative(or null if accounts is empty)
-            Account selected = get();
-            if (accounts.isEmpty()) {
-                if (selected == null) {
-                    // valid
-                } else {
-                    // the previously selected account is gone, we can only set it to null here
-                    set(null);
-                    return;
-                }
-            } else {
-                if (accounts.contains(selected)) {
-                    // valid
-                } else {
-                    // the previously selected account is gone
-                    set(accounts.get(0));
-                    return;
-                }
-            }
-            // selection is valid, store it
-            if (!initialized)
-                return;
-            updateAccountStorages();
-        }
-    };
+    private static final ObservableList<Account> accounts = observableArrayList(account -> new Observable[]{account});
+    private static final ObjectProperty<Account> selectedAccount = new SimpleObjectProperty<>(Accounts.class, "selectedAccount");
 
     /**
      * True if {@link #init()} hasn't been called.
      */
     private static boolean initialized = false;
 
-    static {
-        accounts.addListener(onInvalidating(Accounts::updateAccountStorages));
-    }
-
     private static Map<Object, Object> getAccountStorage(Account account) {
         Map<Object, Object> storage = account.toStorage();
         storage.put("type", getLoginType(getAccountFactory(account)));
-        if (account == selectedAccount.get()) {
-            storage.put("selected", true);
-        }
         return storage;
     }
 
@@ -181,7 +153,67 @@ public final class Accounts {
         if (!initialized)
             return;
         // update storage
-        config().getAccountStorages().setAll(accounts.stream().map(Accounts::getAccountStorage).collect(toList()));
+
+        ArrayList<Map<Object, Object>> global = new ArrayList<>();
+        ArrayList<Map<Object, Object>> portable = new ArrayList<>();
+
+        for (Account account : accounts) {
+            Map<Object, Object> storage = getAccountStorage(account);
+            if (account.isPortable())
+                portable.add(storage);
+            else
+                global.add(storage);
+        }
+
+        if (!global.equals(globalAccountStorages))
+            globalAccountStorages.setAll(global);
+        if (!portable.equals(config().getAccountStorages()))
+            config().getAccountStorages().setAll(portable);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void loadGlobalAccountStorages() {
+        Path globalAccountsFile = Metadata.HMCL_DIRECTORY.resolve("accounts.json");
+        if (Files.exists(globalAccountsFile)) {
+            try (Reader reader = Files.newBufferedReader(globalAccountsFile)) {
+                globalAccountStorages.setAll((List<Map<Object, Object>>)
+                        Config.CONFIG_GSON.fromJson(reader, new TypeToken<List<Map<Object, Object>>>() {
+                        }.getType()));
+            } catch (Throwable e) {
+                LOG.warning("Failed to load global accounts", e);
+            }
+        }
+
+        InvocationDispatcher<String> dispatcher = InvocationDispatcher.runOn(Lang::thread, json -> {
+            LOG.info("Saving global accounts");
+            synchronized (globalAccountsFile) {
+                try {
+                    synchronized (globalAccountsFile) {
+                        FileUtils.saveSafely(globalAccountsFile, json);
+                    }
+                } catch (IOException e) {
+                    LOG.error("Failed to save global accounts", e);
+                }
+            }
+        });
+
+        globalAccountStorages.addListener(onInvalidating(() ->
+                dispatcher.accept(Config.CONFIG_GSON.toJson(globalAccountStorages))));
+    }
+
+    private static Account parseAccount(Map<Object, Object> storage) {
+        AccountFactory<?> factory = type2factory.get(storage.get("type"));
+        if (factory == null) {
+            LOG.warning("Unrecognized account type: " + storage);
+            return null;
+        }
+
+        try {
+            return factory.fromStorage(storage);
+        } catch (Exception e) {
+            LOG.warning("Failed to load account: " + storage, e);
+            return null;
+        }
     }
 
     /**
@@ -191,45 +223,112 @@ public final class Accounts {
         if (initialized)
             throw new IllegalStateException("Already initialized");
 
-        // load accounts
-        config().getAccountStorages().forEach(storage -> {
-            AccountFactory<?> factory = type2factory.get(storage.get("type"));
-            if (factory == null) {
-                LOG.warning("Unrecognized account type: " + storage);
-                return;
-            }
-            Account account;
-            try {
-                account = factory.fromStorage(storage);
-            } catch (Exception e) {
-                LOG.log(Level.WARNING, "Failed to load account: " + storage, e);
-                return;
-            }
-            accounts.add(account);
+        if (!config().isAddedLittleSkin()) {
+            AuthlibInjectorServer littleSkin = new AuthlibInjectorServer("https://littleskin.cn/api/yggdrasil/");
 
-            if (Boolean.TRUE.equals(storage.get("selected"))) {
-                selectedAccount.set(account);
+            if (config().getAuthlibInjectorServers().stream().noneMatch(it -> littleSkin.getUrl().equals(it.getUrl()))) {
+                config().getAuthlibInjectorServers().add(0, littleSkin);
             }
-        });
+
+            config().setAddedLittleSkin(true);
+        }
+
+        loadGlobalAccountStorages();
+
+        // load accounts
+        Account selected = null;
+        for (Map<Object, Object> storage : config().getAccountStorages()) {
+            Account account = parseAccount(storage);
+            if (account != null) {
+                account.setPortable(true);
+                accounts.add(account);
+                if (Boolean.TRUE.equals(storage.get("selected"))) {
+                    selected = account;
+                }
+            }
+        }
+
+        for (Map<Object, Object> storage : globalAccountStorages) {
+            Account account = parseAccount(storage);
+            if (account != null) {
+                accounts.add(account);
+            }
+        }
+
+        String selectedAccountIdentifier = config().getSelectedAccount();
+        if (selected == null && selectedAccountIdentifier != null) {
+            boolean portable = true;
+            if (selectedAccountIdentifier.startsWith(GLOBAL_PREFIX)) {
+                portable = false;
+                selectedAccountIdentifier = selectedAccountIdentifier.substring(GLOBAL_PREFIX.length());
+            }
+
+            for (Account account : accounts) {
+                if (selectedAccountIdentifier.equals(account.getIdentifier())) {
+                    if (portable == account.isPortable()) {
+                        selected = account;
+                        break;
+                    } else if (selected == null) {
+                        selected = account;
+                    }
+                }
+            }
+        }
+
+        if (selected == null && !accounts.isEmpty()) {
+            selected = accounts.get(0);
+        }
+
+        selectedAccount.set(selected);
+
+        InvalidationListener listener = o -> {
+            // this method first checks whether the current selection is valid
+            // if it's valid, the underlying storage will be updated
+            // otherwise, the first account will be selected as an alternative(or null if accounts is empty)
+            Account account = selectedAccount.get();
+            if (accounts.isEmpty()) {
+                if (account == null) {
+                    // valid
+                } else {
+                    // the previously selected account is gone, we can only set it to null here
+                    selectedAccount.set(null);
+                }
+            } else {
+                if (accounts.contains(account)) {
+                    // valid
+                } else {
+                    // the previously selected account is gone
+                    selectedAccount.set(accounts.get(0));
+                }
+            }
+        };
+        selectedAccount.addListener(listener);
+        selectedAccount.addListener(onInvalidating(() -> {
+            Account account = selectedAccount.get();
+            if (account != null)
+                config().setSelectedAccount(account.isPortable() ? account.getIdentifier() : GLOBAL_PREFIX + account.getIdentifier());
+            else
+                config().setSelectedAccount(null);
+        }));
+        accounts.addListener(listener);
+        accounts.addListener(onInvalidating(Accounts::updateAccountStorages));
 
         initialized = true;
 
         config().getAuthlibInjectorServers().addListener(onInvalidating(Accounts::removeDanglingAuthlibInjectorAccounts));
 
-        Account selected = selectedAccount.get();
         if (selected != null) {
+            Account finalSelected = selected;
             Schedulers.io().execute(() -> {
                 try {
-                    selected.logIn();
-                } catch (AuthenticationException e) {
-                    LOG.log(Level.WARNING, "Failed to log " + selected + " in", e);
+                    finalSelected.logIn();
+                } catch (Throwable e) {
+                    LOG.warning("Failed to log " + finalSelected + " in", e);
                 }
             });
         }
 
-        if (!config().getAuthlibInjectorServers().isEmpty()) {
-            triggerAuthlibInjectorUpdateCheck();
-        }
+        triggerAuthlibInjectorUpdateCheck();
 
         for (AuthlibInjectorServer server : config().getAuthlibInjectorServers()) {
             if (selected instanceof AuthlibInjectorAccount && ((AuthlibInjectorAccount) selected).getServer() == server)
@@ -238,7 +337,7 @@ public final class Accounts {
                 try {
                     server.fetchMetadataResponse();
                 } catch (IOException e) {
-                    LOG.log(Level.WARNING, "Failed to fetch authlib-injector server metdata: " + server, e);
+                    LOG.warning("Failed to fetch authlib-injector server metdata: " + server, e);
                 }
             });
         }
@@ -246,10 +345,6 @@ public final class Accounts {
 
     public static ObservableList<Account> getAccounts() {
         return accounts;
-    }
-
-    public static ReadOnlyListProperty<Account> accountsProperty() {
-        return accountsWrapper.getReadOnlyProperty();
     }
 
     public static Account getSelectedAccount() {
@@ -313,9 +408,8 @@ public final class Accounts {
     // ====
 
     // ==== Login type name i18n ===
-    private static Map<AccountFactory<?>, String> unlocalizedLoginTypeNames = mapOf(
+    private static final Map<AccountFactory<?>, String> unlocalizedLoginTypeNames = mapOf(
             pair(Accounts.FACTORY_OFFLINE, "account.methods.offline"),
-            pair(Accounts.FACTORY_MOJANG, "account.methods.yggdrasil"),
             pair(Accounts.FACTORY_AUTHLIB_INJECTOR, "account.methods.authlib_injector"),
             pair(Accounts.FACTORY_MICROSOFT, "account.methods.microsoft"));
 
@@ -329,7 +423,11 @@ public final class Accounts {
         if (exception instanceof NoCharacterException) {
             return i18n("account.failed.no_character");
         } else if (exception instanceof ServerDisconnectException) {
-            return i18n("account.failed.connect_authentication_server");
+            if (exception.getCause() instanceof SSLException) {
+                return i18n("account.failed.ssl");
+            } else {
+                return i18n("account.failed.connect_authentication_server");
+            }
         } else if (exception instanceof ServerResponseMalformedException) {
             return i18n("account.failed.server_response_malformed");
         } else if (exception instanceof RemoteAuthenticationException) {
@@ -370,6 +468,8 @@ public final class Accounts {
             } else {
                 return i18n("account.methods.microsoft.error.unknown", errorCode);
             }
+        } else if (exception instanceof MicrosoftService.XBox400Exception) {
+            return i18n("account.methods.microsoft.error.wrong_verify_method");
         } else if (exception instanceof MicrosoftService.NoMinecraftJavaEditionProfileException) {
             return i18n("account.methods.microsoft.error.no_character");
         } else if (exception instanceof MicrosoftService.NoXuiException) {

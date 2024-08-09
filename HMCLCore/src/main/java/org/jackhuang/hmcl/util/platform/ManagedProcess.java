@@ -17,8 +17,16 @@
  */
 package org.jackhuang.hmcl.util.platform;
 
+import org.jackhuang.hmcl.launch.StreamPump;
+import org.jackhuang.hmcl.util.Lang;
+
+import java.io.IOException;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
+import java.lang.reflect.Field;
 import java.util.*;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 /**
  * The managed process.
@@ -27,14 +35,19 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * @see org.jackhuang.hmcl.launch.ExitWaiter
  * @see org.jackhuang.hmcl.launch.StreamPump
  */
-public class ManagedProcess {
-
+public final class ManagedProcess {
     private final Process process;
     private final List<String> commands;
     private final String classpath;
     private final Map<String, Object> properties = new HashMap<>();
-    private final Queue<String> lines = new ConcurrentLinkedQueue<>();
+    private final List<String> lines = new ArrayList<>();
     private final List<Thread> relatedThreads = new ArrayList<>();
+
+    public ManagedProcess(ProcessBuilder processBuilder) throws IOException {
+        this.process = processBuilder.start();
+        this.commands = processBuilder.command();
+        this.classpath = null;
+    }
 
     /**
      * Constructor.
@@ -71,6 +84,47 @@ public class ManagedProcess {
     }
 
     /**
+     * The PID of the raw system process
+     *
+     * @throws UnsupportedOperationException if current Java environment is not supported.
+     * @return PID
+     */
+    public long getPID() throws UnsupportedOperationException {
+        if (JavaVersion.CURRENT_JAVA.getParsedVersion() >= 9) {
+            // Method Process.pid() is provided (Java 9 or later). Invoke it to get the pid.
+            try {
+                return (long) MethodHandles.publicLookup()
+                        .findVirtual(Process.class, "pid", MethodType.methodType(long.class))
+                        .invokeExact(process);
+            } catch (Throwable e) {
+                throw new UnsupportedOperationException("Cannot get the pid", e);
+            }
+        } else {
+            // Method Process.pid() is not provided. (Java 8).
+            if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
+                // On Windows, we can invoke method Process.pid() to get the pid.
+                // However, this method is supplied since Java 9.
+                // So, there is no ways to get the pid.
+                throw new UnsupportedOperationException("Cannot get the pid of a Process on Java 8 on Windows.");
+            } else if (OperatingSystem.CURRENT_OS == OperatingSystem.OSX || OperatingSystem.CURRENT_OS.isLinuxOrBSD()) {
+                // On Linux or Mac, we can get field UnixProcess.pid field to get the pid.
+                // All the Java version is accepted.
+                // See https://github.com/openjdk/jdk/blob/jdk8-b120/jdk/src/solaris/classes/java/lang/UNIXProcess.java.linux
+                try {
+                    Field pidField = process.getClass().getDeclaredField("pid");
+                    pidField.setAccessible(true);
+                    return pidField.getInt(process);
+                } catch (NoSuchFieldException | IllegalAccessException e) {
+                    throw new UnsupportedOperationException("Cannot get the pid of a Process on Java 8 on OSX / Linux.", e);
+                }
+            } else {
+                // Unknown Operating System, no fallback available.
+                throw new UnsupportedOperationException(String.format("Cannot get the pid of a Process on Java 8 on Unknown Operating System (%s).", System.getProperty("os.name")));
+            }
+        }
+    }
+
+    /**
      * The command line.
      *
      * @return the list of each part of command line separated by spaces.
@@ -101,11 +155,19 @@ public class ManagedProcess {
      *
      * @see #addLine
      */
-    public Collection<String> getLines() {
-        return Collections.unmodifiableCollection(lines);
+    public synchronized List<String> getLines(Predicate<String> lineFilter) {
+        if (lineFilter == null)
+            return Collections.unmodifiableList(Arrays.asList(lines.toArray(new String[0])));
+
+        ArrayList<String> res = new ArrayList<>();
+        for (String line : this.lines) {
+            if (lineFilter.test(line))
+                res.add(line);
+        }
+        return Collections.unmodifiableList(res);
     }
 
-    public void addLine(String line) {
+    public synchronized void addLine(String line) {
         lines.add(line);
     }
 
@@ -117,6 +179,14 @@ public class ManagedProcess {
      */
     public synchronized void addRelatedThread(Thread thread) {
         relatedThreads.add(thread);
+    }
+
+    public synchronized void pumpInputStream(Consumer<String> onLogLine) {
+        addRelatedThread(Lang.thread(new StreamPump(process.getInputStream(), onLogLine, OperatingSystem.NATIVE_CHARSET), "ProcessInputStreamPump", true));
+    }
+
+    public synchronized void pumpErrorStream(Consumer<String> onLogLine) {
+        addRelatedThread(Lang.thread(new StreamPump(process.getErrorStream(), onLogLine, OperatingSystem.NATIVE_CHARSET), "ProcessErrorStreamPump", true));
     }
 
     /**

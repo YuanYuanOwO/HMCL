@@ -28,10 +28,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.logging.Level;
 
 import static java.util.Objects.requireNonNull;
-import static org.jackhuang.hmcl.util.Logging.LOG;
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 public class MicrosoftAccount extends OAuthAccount {
 
@@ -78,6 +77,11 @@ public class MicrosoftAccount extends OAuthAccount {
     }
 
     @Override
+    public String getIdentifier() {
+        return "microsoft:" + getUUID();
+    }
+
+    @Override
     public AuthInfo logIn() throws AuthenticationException {
         if (!authenticated) {
             if (service.validate(session.getNotAfter(), session.getTokenType(), session.getAccessToken())) {
@@ -117,8 +121,8 @@ public class MicrosoftAccount extends OAuthAccount {
     }
 
     @Override
-    public Optional<AuthInfo> playOffline() {
-        return Optional.of(session.toAuthInfo());
+    public AuthInfo playOffline() {
+        return session.toAuthInfo();
     }
 
     @Override
@@ -137,7 +141,7 @@ public class MicrosoftAccount extends OAuthAccount {
                     try {
                         return YggdrasilService.getTextures(it);
                     } catch (ServerResponseMalformedException e) {
-                        LOG.log(Level.WARNING, "Failed to parse texture payload", e);
+                        LOG.warning("Failed to parse texture payload", e);
                         return Optional.empty();
                     }
                 }));
@@ -163,6 +167,6 @@ public class MicrosoftAccount extends OAuthAccount {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         MicrosoftAccount that = (MicrosoftAccount) o;
-        return characterUUID.equals(that.characterUUID);
+        return this.isPortable() == that.isPortable() && characterUUID.equals(that.characterUUID);
     }
 }

@@ -25,8 +25,8 @@ import org.jackhuang.hmcl.task.FileDownloadTask;
 import org.jackhuang.hmcl.task.GetTask;
 import org.jackhuang.hmcl.task.Task;
 import org.jackhuang.hmcl.util.gson.JsonUtils;
+import org.jackhuang.hmcl.util.io.ChecksumMismatchException;
 import org.jackhuang.hmcl.util.io.FileUtils;
-import org.jackhuang.hmcl.util.io.NetworkUtils;
 import org.jackhuang.hmcl.util.platform.OperatingSystem;
 import org.jackhuang.hmcl.util.versioning.VersionNumber;
 import org.tukaani.xz.LZMAInputStream;
@@ -37,8 +37,12 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.*;
 import java.util.stream.Collectors;
+
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 public class JavaDownloadTask extends Task<Void> {
     private final GameJavaVersion javaVersion;
@@ -47,12 +51,14 @@ public class JavaDownloadTask extends Task<Void> {
     private final Task<RemoteFiles> javaDownloadsTask;
     private JavaDownloads.JavaDownload download;
     private final List<Task<?>> dependencies = new ArrayList<>();
+    private final DownloadProvider downloadProvider;
 
     public JavaDownloadTask(GameJavaVersion javaVersion, Path rootDir, DownloadProvider downloadProvider) {
         this.javaVersion = javaVersion;
         this.rootDir = rootDir;
-        this.javaDownloadsTask = new GetTask(NetworkUtils.toURL(downloadProvider.injectURL(
-                "https://launchermeta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json")))
+        this.downloadProvider = downloadProvider;
+        this.javaDownloadsTask = new GetTask(downloadProvider.injectURLWithCandidates(
+                "https://piston-meta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json"))
         .thenComposeAsync(javaDownloadsJson -> {
             JavaDownloads allDownloads = JsonUtils.fromNonNullJson(javaDownloadsJson, JavaDownloads.class);
             if (!allDownloads.getDownloads().containsKey(platform)) throw new UnsupportedPlatformException();
@@ -60,9 +66,9 @@ public class JavaDownloadTask extends Task<Void> {
             if (!osDownloads.containsKey(javaVersion.getComponent())) throw new UnsupportedPlatformException();
             List<JavaDownloads.JavaDownload> candidates = osDownloads.get(javaVersion.getComponent());
             for (JavaDownloads.JavaDownload download : candidates) {
-                if (VersionNumber.VERSION_COMPARATOR.compare(download.getVersion().getName(), Integer.toString(javaVersion.getMajorVersion())) >= 0) {
+                if (VersionNumber.compare(download.getVersion().getName(), Integer.toString(javaVersion.getMajorVersion())) >= 0) {
                     this.download = download;
-                    return new GetTask(NetworkUtils.toURL(download.getManifest().getUrl()));
+                    return new GetTask(downloadProvider.injectURLWithCandidates(download.getManifest().getUrl()));
                 }
             }
             throw new UnsupportedPlatformException();
@@ -92,23 +98,49 @@ public class JavaDownloadTask extends Task<Void> {
             Path dest = jvmDir.resolve(entry.getKey());
             if (entry.getValue() instanceof RemoteFiles.RemoteFile) {
                 RemoteFiles.RemoteFile file = ((RemoteFiles.RemoteFile) entry.getValue());
+
+                // Use local file if it already exists
+                try {
+                    BasicFileAttributes localFileAttributes = Files.readAttributes(dest, BasicFileAttributes.class);
+                    if (localFileAttributes.isRegularFile() && file.getDownloads().containsKey("raw")) {
+                        DownloadInfo downloadInfo = file.getDownloads().get("raw");
+                        if (localFileAttributes.size() == downloadInfo.getSize()) {
+                            ChecksumMismatchException.verifyChecksum(dest, "SHA-1", downloadInfo.getSha1());
+                            LOG.info("Skip existing file: " + dest);
+                            continue;
+                        }
+                    }
+                } catch (IOException ignored) {
+                }
+
                 if (file.getDownloads().containsKey("lzma")) {
                     DownloadInfo download = file.getDownloads().get("lzma");
-                    File tempFile = Files.createTempFile("hmcl", "tmp").toFile();
-                    FileDownloadTask task = new FileDownloadTask(NetworkUtils.toURL(download.getUrl()), tempFile, new FileDownloadTask.IntegrityCheck("SHA-1", download.getSha1()));
+                    File tempFile = jvmDir.resolve(entry.getKey() + ".lzma").toFile();
+                    FileDownloadTask task = new FileDownloadTask(downloadProvider.injectURLWithCandidates(download.getUrl()), tempFile, new FileDownloadTask.IntegrityCheck("SHA-1", download.getSha1()));
                     task.setName(entry.getKey());
                     dependencies.add(task.thenRunAsync(() -> {
+                        Path decompressed = jvmDir.resolve(entry.getKey() + ".tmp");
                         try (LZMAInputStream input = new LZMAInputStream(new FileInputStream(tempFile))) {
-                            Files.copy(input, dest);
+                            Files.copy(input, decompressed, StandardCopyOption.REPLACE_EXISTING);
                         } catch (IOException e) {
                             throw new ArtifactMalformedException("File " + entry.getKey() + " is malformed", e);
+                        }
+                        tempFile.delete();
+
+                        Files.move(decompressed, dest, StandardCopyOption.REPLACE_EXISTING);
+                        if (file.isExecutable()) {
+                            dest.toFile().setExecutable(true);
                         }
                     }));
                 } else if (file.getDownloads().containsKey("raw")) {
                     DownloadInfo download = file.getDownloads().get("raw");
-                    FileDownloadTask task = new FileDownloadTask(NetworkUtils.toURL(download.getUrl()), dest.toFile(), new FileDownloadTask.IntegrityCheck("SHA-1", download.getSha1()));
+                    FileDownloadTask task = new FileDownloadTask(downloadProvider.injectURLWithCandidates(download.getUrl()), dest.toFile(), new FileDownloadTask.IntegrityCheck("SHA-1", download.getSha1()));
                     task.setName(entry.getKey());
-                    dependencies.add(task);
+                    if (file.isExecutable()) {
+                        dependencies.add(task.thenRunAsync(() -> dest.toFile().setExecutable(true)));
+                    } else {
+                        dependencies.add(task);
+                    }
                 } else {
                     continue;
                 }

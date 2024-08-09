@@ -34,8 +34,8 @@ public class ForgeRemoteVersion extends RemoteVersion {
      * @param selfVersion the version string of the remote version.
      * @param url         the installer or universal jar original URL.
      */
-    public ForgeRemoteVersion(String gameVersion, String selfVersion, Instant instant, List<String> url) {
-        super(LibraryAnalyzer.LibraryType.FORGE.getPatchId(), gameVersion, selfVersion, instant, url);
+    public ForgeRemoteVersion(String gameVersion, String selfVersion, Instant releaseDate, List<String> url) {
+        super(LibraryAnalyzer.LibraryType.FORGE.getPatchId(), gameVersion, selfVersion, releaseDate, url);
     }
 
     @Override

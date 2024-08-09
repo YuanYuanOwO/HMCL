@@ -21,16 +21,16 @@ import org.jackhuang.hmcl.Metadata;
 import org.jackhuang.hmcl.auth.AuthInfo;
 import org.jackhuang.hmcl.launch.DefaultLauncher;
 import org.jackhuang.hmcl.launch.ProcessListener;
-import org.jackhuang.hmcl.util.Logging;
 import org.jackhuang.hmcl.util.i18n.I18n;
 import org.jackhuang.hmcl.util.io.FileUtils;
 import org.jackhuang.hmcl.util.platform.ManagedProcess;
+import org.jackhuang.hmcl.util.versioning.GameVersionNumber;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.Locale;
 import java.util.Map;
-import java.util.logging.Level;
+
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 /**
  * @author huangyuhui
@@ -59,15 +59,60 @@ public final class HMCLGameLauncher extends DefaultLauncher {
 
     private void generateOptionsTxt() {
         File optionsFile = new File(repository.getRunDirectory(version.getId()), "options.txt");
-        if (optionsFile.exists())
+        File configFolder = new File(repository.getRunDirectory(version.getId()), "config");
+
+        if (optionsFile.exists()) {
             return;
-        try {
-            // TODO: Dirty implementation here
-            if (I18n.getCurrentLocale().getLocale() == Locale.CHINA)
-                FileUtils.writeText(optionsFile, "lang:zh_CN\nforceUnicodeFont:true\n");
-        } catch (IOException e) {
-            Logging.LOG.log(Level.WARNING, "Unable to generate options.txt", e);
         }
+
+        if (configFolder.isDirectory()) {
+            if (findFiles(configFolder, "options.txt")) {
+                return;
+            }
+        }
+
+        if (!I18n.isUseChinese()) {
+            return;
+        }
+
+        String lang;
+        /*
+            1.0-     ：没有语言选项，遇到这些版本时不设置
+            1.1 ~ 5  ：zh_CN 时正常，zh_cn 时崩溃（最后两位字母必须大写，否则将会 NPE 崩溃）
+            1.6 ~ 10 ：zh_CN 时正常，zh_cn 时自动切换为英文
+            1.11 ~ 12：zh_cn 时正常，zh_CN 时虽然显示了中文但语言设置会错误地显示选择英文
+            1.13+    ：zh_cn 时正常，zh_CN 时自动切换为英文
+         */
+        GameVersionNumber gameVersion = GameVersionNumber.asGameVersion(repository.getGameVersion(version));
+        if (gameVersion.compareTo("1.1") < 0) {
+            lang = null;
+        } else if (gameVersion.compareTo("1.11") < 0) {
+            lang = "zh_CN";
+        } else {
+            lang = "zh_cn";
+        }
+
+        if (lang != null) {
+            try {
+                FileUtils.writeText(optionsFile, String.format("lang:%s\n", lang));
+            } catch (IOException e) {
+                LOG.warning("Unable to generate options.txt", e);
+            }
+        }
+    }
+
+    private boolean findFiles(File folder, String fileName) {
+        File[] fs = folder.listFiles();
+        if (fs != null) {
+            for (File f : fs) {
+                if (f.isDirectory())
+                    if (f.listFiles((dir, name) -> name.equals(fileName)) != null)
+                        return true;
+                if (f.getName().equals(fileName))
+                    return true;
+            }
+        }
+        return false;
     }
 
     @Override

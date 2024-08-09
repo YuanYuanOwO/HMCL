@@ -17,31 +17,22 @@
  */
 package org.jackhuang.hmcl.mod.multimc;
 
-import org.jackhuang.hmcl.download.DefaultDependencyManager;
-import org.jackhuang.hmcl.mod.Modpack;
-import org.jackhuang.hmcl.task.Task;
+import org.jackhuang.hmcl.mod.ModpackManifest;
+import org.jackhuang.hmcl.mod.ModpackProvider;
 import org.jackhuang.hmcl.util.Lang;
-import org.jackhuang.hmcl.util.io.CompressingUtils;
-import org.jackhuang.hmcl.util.io.FileUtils;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileSystem;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Optional;
 import java.util.Properties;
-import java.util.stream.Stream;
 
 /**
  *
  * @author huangyuhui
  */
-public final class MultiMCInstanceConfiguration {
+public final class MultiMCInstanceConfiguration implements ModpackManifest {
 
     private final String instanceType; // InstanceType
     private final String name; // name
@@ -70,7 +61,7 @@ public final class MultiMCInstanceConfiguration {
 
     private final MultiMCManifest mmcPack;
 
-    private MultiMCInstanceConfiguration(String defaultName, InputStream contentStream, MultiMCManifest mmcPack) throws IOException {
+    MultiMCInstanceConfiguration(String defaultName, InputStream contentStream, MultiMCManifest mmcPack) throws IOException {
         Properties p = new Properties();
         p.load(new InputStreamReader(contentStream, StandardCharsets.UTF_8));
 
@@ -334,38 +325,9 @@ public final class MultiMCInstanceConfiguration {
         return mmcPack;
     }
 
-    private static boolean testPath(Path root) {
-        return Files.exists(root.resolve("instance.cfg"));
+    @Override
+    public ModpackProvider getProvider() {
+        return MultiMCModpackProvider.INSTANCE;
     }
 
-    public static Path getRootPath(Path root) throws IOException {
-        if (testPath(root)) return root;
-        try (Stream<Path> stream = Files.list(root)) {
-            Path candidate = stream.filter(Files::isDirectory).findAny()
-                    .orElseThrow(() -> new IOException("Not a valid MultiMC modpack"));
-            if (testPath(candidate)) return candidate;
-            throw new IOException("Not a valid MultiMC modpack");
-        }
-    }
-
-    public static Modpack readMultiMCModpackManifest(Path modpackFile, Charset encoding) throws IOException {
-        try (FileSystem fs = CompressingUtils.readonly(modpackFile).setEncoding(encoding).build()) {
-            Path root = getRootPath(fs.getPath("/"));
-            MultiMCManifest manifest = MultiMCManifest.readMultiMCModpackManifest(root);
-            String name = FileUtils.getName(root, FileUtils.getNameWithoutExtension(modpackFile));
-
-            Path instancePath = root.resolve("instance.cfg");
-            if (Files.notExists(instancePath))
-                throw new IOException("`instance.cfg` not found, " + modpackFile + " is not a valid MultiMC modpack.");
-            try (InputStream instanceStream = Files.newInputStream(instancePath)) {
-                MultiMCInstanceConfiguration cfg = new MultiMCInstanceConfiguration(name, instanceStream, manifest);
-                return new Modpack(cfg.getName(), "", "", cfg.getGameVersion(), cfg.getNotes(), encoding, cfg) {
-                    @Override
-                    public Task<?> getInstallTask(DefaultDependencyManager dependencyManager, File zipFile, String name) {
-                        return new MultiMCModpackInstallTask(dependencyManager, zipFile, this, cfg, name);
-                    }
-                };
-            }
-        }
-    }
 }

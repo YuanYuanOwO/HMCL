@@ -17,6 +17,8 @@
  */
 package org.jackhuang.hmcl.util.io;
 
+import org.jetbrains.annotations.Nullable;
+
 import java.io.IOException;
 import java.net.URISyntaxException;
 import java.nio.file.FileSystemNotFoundException;
@@ -24,8 +26,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.CodeSource;
-import java.util.Optional;
-import java.util.jar.Attributes;
 import java.util.jar.JarFile;
 import java.util.jar.Manifest;
 
@@ -33,33 +33,45 @@ public final class JarUtils {
     private JarUtils() {
     }
 
-    @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
-    private static final Optional<Path> THIS_JAR =
-            Optional.ofNullable(JarUtils.class.getProtectionDomain().getCodeSource())
-                    .map(CodeSource::getLocation)
-                    .map(url -> {
-                        try {
-                            return Paths.get(url.toURI());
-                        } catch (FileSystemNotFoundException | IllegalArgumentException | URISyntaxException e) {
-                            return null;
-                        }
-                    })
-                    .filter(Files::isRegularFile);
+    private static final Path THIS_JAR;
 
-    public static Optional<Path> thisJar() {
-        return THIS_JAR;
-    }
+    private static final Manifest manifest;
 
-    public static Optional<Manifest> getManifest(Path jar) {
-        try (JarFile file = new JarFile(jar.toFile())) {
-            return Optional.ofNullable(file.getManifest());
-        } catch (IOException e) {
-            return Optional.empty();
+    static {
+        CodeSource cs = JarUtils.class.getProtectionDomain().getCodeSource();
+        if (cs == null) {
+            THIS_JAR = null;
+            manifest = new Manifest();
+        } else {
+            Path path;
+            try {
+                path = Paths.get(cs.getLocation().toURI()).toAbsolutePath();
+            } catch (FileSystemNotFoundException | IllegalArgumentException | URISyntaxException e) {
+                path = null;
+            }
+            if (path == null || !Files.isRegularFile(path)) {
+                THIS_JAR = null;
+                manifest = new Manifest();
+            } else {
+                THIS_JAR = path;
+                Manifest mn;
+                try (JarFile file = new JarFile(path.toFile())) {
+                    mn = file.getManifest();
+                } catch (IOException e) {
+                    mn = new Manifest();
+                }
+                manifest = mn;
+            }
         }
     }
 
-    public static Optional<String> getImplementationVersion(Path jar) {
-        return Optional.of(jar).flatMap(JarUtils::getManifest)
-                .flatMap(manifest -> Optional.ofNullable(manifest.getMainAttributes().getValue(Attributes.Name.IMPLEMENTATION_VERSION)));
+    @Nullable
+    public static Path thisJarPath() {
+        return THIS_JAR;
+    }
+
+    public static String getManifestAttribute(String name, String defaultValue) {
+        String value = manifest.getMainAttributes().getValue(name);
+        return value != null ? value : defaultValue;
     }
 }

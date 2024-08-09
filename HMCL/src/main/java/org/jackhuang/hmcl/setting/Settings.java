@@ -20,10 +20,9 @@ package org.jackhuang.hmcl.setting;
 import javafx.beans.binding.Bindings;
 import org.jackhuang.hmcl.Metadata;
 import org.jackhuang.hmcl.game.HMCLCacheRepository;
+import org.jackhuang.hmcl.ui.animation.AnimationUtils;
 import org.jackhuang.hmcl.util.CacheRepository;
 import org.jackhuang.hmcl.util.io.FileUtils;
-
-import java.util.Locale;
 
 import static org.jackhuang.hmcl.setting.ConfigHolder.config;
 
@@ -46,14 +45,12 @@ public final class Settings {
     }
 
     private Settings() {
-        config().localizationProperty().addListener(unused -> updateSystemLocale());
-        updateSystemLocale();
-
         DownloadProviders.init();
         ProxyManager.init();
         Accounts.init();
         Profiles.init();
         AuthlibInjectorServers.init();
+        AnimationUtils.init();
 
         CacheRepository.setInstance(HMCLCacheRepository.REPOSITORY);
         HMCLCacheRepository.REPOSITORY.directoryProperty().bind(Bindings.createStringBinding(() -> {
@@ -78,9 +75,5 @@ public final class Settings {
             default:
                 return null;
         }
-    }
-
-    private static void updateSystemLocale() {
-        Locale.setDefault(config().getLocalization().getLocale());
     }
 }

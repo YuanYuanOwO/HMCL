@@ -17,9 +17,9 @@
  */
 package org.jackhuang.hmcl.event;
 
-import org.jackhuang.hmcl.util.Logging;
-
 import java.util.concurrent.ConcurrentHashMap;
+
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 /**
  *
@@ -31,13 +31,12 @@ public final class EventBus {
 
     @SuppressWarnings("unchecked")
     public <T extends Event> EventManager<T> channel(Class<T> clazz) {
-        events.putIfAbsent(clazz, new EventManager<>());
-        return (EventManager<T>) events.get(clazz);
+        return (EventManager<T>) events.computeIfAbsent(clazz, ignored -> new EventManager<>());
     }
 
     @SuppressWarnings("unchecked")
     public Event.Result fireEvent(Event obj) {
-        Logging.LOG.info(obj + " gets fired");
+        LOG.info(obj + " gets fired");
 
         return channel((Class<Event>) obj.getClass()).fireEvent(obj);
     }

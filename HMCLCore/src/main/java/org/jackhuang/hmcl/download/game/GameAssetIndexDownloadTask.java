@@ -25,7 +25,6 @@ import org.jackhuang.hmcl.game.Version;
 import org.jackhuang.hmcl.task.FileDownloadTask;
 import org.jackhuang.hmcl.task.Task;
 import org.jackhuang.hmcl.util.DigestUtils;
-import org.jackhuang.hmcl.util.Hex;
 import org.jackhuang.hmcl.util.StringUtils;
 import org.jackhuang.hmcl.util.gson.JsonUtils;
 import org.jackhuang.hmcl.util.io.FileUtils;
@@ -35,9 +34,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.logging.Level;
 
-import static org.jackhuang.hmcl.util.Logging.LOG;
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 /**
  * This task is to download asset index file provided in minecraft.json.
@@ -79,11 +77,11 @@ public final class GameAssetIndexDownloadTask extends Task<Void> {
             // verify correctness of file content
             if (verifyHashCode) {
                 try {
-                    String actualSum = Hex.encodeHex(DigestUtils.digest("SHA-1", assetIndexFile));
+                    String actualSum = DigestUtils.digestToString("SHA-1", assetIndexFile);
                     if (actualSum.equalsIgnoreCase(assetIndexInfo.getSha1()))
                         return;
                 } catch (IOException e) {
-                    LOG.log(Level.WARNING, "Failed to calculate sha1sum of file " + assetIndexInfo, e);
+                    LOG.warning("Failed to calculate sha1sum of file " + assetIndexInfo, e);
                     // continue downloading
                 }
             } else {

@@ -19,8 +19,6 @@ package org.jackhuang.hmcl.game;
 
 import com.google.gson.JsonParseException;
 import org.jackhuang.hmcl.util.gson.JsonUtils;
-import org.jackhuang.hmcl.util.io.CompressingUtils;
-import org.jackhuang.hmcl.util.io.FileUtils;
 import org.jenkinsci.constant_pool_scanner.ConstantPool;
 import org.jenkinsci.constant_pool_scanner.ConstantPoolScanner;
 import org.jenkinsci.constant_pool_scanner.ConstantType;
@@ -28,37 +26,36 @@ import org.jenkinsci.constant_pool_scanner.StringConstant;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.FileSystem;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.io.InputStream;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.logging.Level;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 import static org.jackhuang.hmcl.util.Lang.tryCast;
-import static org.jackhuang.hmcl.util.Logging.LOG;
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 /**
  * @author huangyuhui
  */
-public final class GameVersion {
+final class GameVersion {
     private GameVersion() {
     }
 
-    private static Optional<String> getVersionFromJson(Path versionJson) {
+    private static Optional<String> getVersionFromJson(InputStream versionJson) {
         try {
-            Map<?, ?> version = JsonUtils.fromNonNullJson(FileUtils.readText(versionJson), Map.class);
-            return tryCast(version.get("name"), String.class);
+            Map<?, ?> version = JsonUtils.fromNonNullJsonFully(versionJson, Map.class);
+            return tryCast(version.get("id"), String.class);
         } catch (IOException | JsonParseException e) {
-            LOG.log(Level.WARNING, "Failed to parse version.json", e);
+            LOG.warning("Failed to parse version.json", e);
             return Optional.empty();
         }
     }
 
-    private static Optional<String> getVersionOfClassMinecraft(byte[] bytecode) throws IOException {
+    private static Optional<String> getVersionOfClassMinecraft(InputStream bytecode) throws IOException {
         ConstantPool pool = ConstantPoolScanner.parse(bytecode, ConstantType.STRING);
 
         return StreamSupport.stream(pool.list(StringConstant.class).spliterator(), false)
@@ -68,7 +65,7 @@ public final class GameVersion {
                 .findFirst();
     }
 
-    private static Optional<String> getVersionFromClassMinecraftServer(byte[] bytecode) throws IOException {
+    private static Optional<String> getVersionFromClassMinecraftServer(InputStream bytecode) throws IOException {
         ConstantPool pool = ConstantPoolScanner.parse(bytecode, ConstantType.STRING);
 
         List<String> list = StreamSupport.stream(pool.list(StringConstant.class).spliterator(), false)
@@ -94,23 +91,34 @@ public final class GameVersion {
         if (file == null || !file.exists() || !file.isFile() || !file.canRead())
             return Optional.empty();
 
-        try (FileSystem gameJar = CompressingUtils.createReadOnlyZipFileSystem(file.toPath())) {
-            Path versionJson = gameJar.getPath("version.json");
-            if (Files.exists(versionJson)) {
-                Optional<String> result = getVersionFromJson(versionJson);
+        try (ZipFile gameJar = new ZipFile(file)) {
+            ZipEntry versionJson = gameJar.getEntry("version.json");
+            if (versionJson != null) {
+                Optional<String> result = getVersionFromJson(gameJar.getInputStream(versionJson));
                 if (result.isPresent())
                     return result;
             }
 
-            Path minecraft = gameJar.getPath("net/minecraft/client/Minecraft.class");
-            if (Files.exists(minecraft)) {
-                Optional<String> result = getVersionOfClassMinecraft(Files.readAllBytes(minecraft));
-                if (result.isPresent())
-                    return result;
+            ZipEntry minecraft = gameJar.getEntry("net/minecraft/client/Minecraft.class");
+            if (minecraft != null) {
+                try (InputStream is = gameJar.getInputStream(minecraft)) {
+                    Optional<String> result = getVersionOfClassMinecraft(is);
+                    if (result.isPresent()) {
+                        String version = result.get();
+                        if (version.startsWith("Beta ")) {
+                            result = Optional.of("b" + version.substring("Beta ".length()));
+                        }
+                        return result;
+                    }
+                }
             }
-            Path minecraftServer = gameJar.getPath("net/minecraft/server/MinecraftServer.class");
-            if (Files.exists(minecraftServer))
-                return getVersionFromClassMinecraftServer(Files.readAllBytes(minecraftServer));
+
+            ZipEntry minecraftServer = gameJar.getEntry("net/minecraft/server/MinecraftServer.class");
+            if (minecraftServer != null) {
+                try (InputStream is = gameJar.getInputStream(minecraftServer)) {
+                    return getVersionFromClassMinecraftServer(is);
+                }
+            }
             return Optional.empty();
         } catch (IOException e) {
             return Optional.empty();

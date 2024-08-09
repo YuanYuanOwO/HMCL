@@ -26,7 +26,7 @@ import org.jackhuang.hmcl.mod.ModpackConfiguration;
 import org.jackhuang.hmcl.task.FileDownloadTask;
 import org.jackhuang.hmcl.task.GetTask;
 import org.jackhuang.hmcl.task.Task;
-import org.jackhuang.hmcl.util.Logging;
+import org.jackhuang.hmcl.util.DigestUtils;
 import org.jackhuang.hmcl.util.StringUtils;
 import org.jackhuang.hmcl.util.gson.JsonUtils;
 import org.jackhuang.hmcl.util.io.FileUtils;
@@ -39,11 +39,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.function.Function;
-import java.util.logging.Level;
 import java.util.stream.Collectors;
 
-import static org.jackhuang.hmcl.util.DigestUtils.digest;
-import static org.jackhuang.hmcl.util.Hex.encodeHex;
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 public class ServerModpackCompletionTask extends Task<Void> {
 
@@ -72,7 +70,7 @@ public class ServerModpackCompletionTask extends Task<Void> {
                     }.getType());
                 }
             } catch (Exception e) {
-                Logging.LOG.log(Level.WARNING, "Unable to read Server modpack manifest.json", e);
+                LOG.warning("Unable to read Server modpack manifest.json", e);
             }
         } else {
             this.manifest = manifest;
@@ -149,7 +147,7 @@ public class ServerModpackCompletionTask extends Task<Void> {
                 download = true;
             } else {
                 // If user modified this entry file, we will not replace this file since this modified file is that user expects.
-                String fileHash = encodeHex(digest("SHA-1", actualPath));
+                String fileHash = DigestUtils.digestToString("SHA-1", actualPath);
                 String oldHash = files.get(file.getPath()).getHash();
                 download = !Objects.equals(oldHash, file.getHash()) && Objects.equals(oldHash, fileHash);
             }

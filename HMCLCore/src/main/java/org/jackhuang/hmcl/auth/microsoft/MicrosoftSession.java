@@ -19,6 +19,7 @@ package org.jackhuang.hmcl.auth.microsoft;
 
 import org.jackhuang.hmcl.auth.AuthInfo;
 import org.jackhuang.hmcl.util.gson.UUIDTypeAdapter;
+import org.jackhuang.hmcl.util.logging.Logger;
 
 import java.util.Map;
 import java.util.UUID;
@@ -43,6 +44,8 @@ public class MicrosoftSession {
         this.refreshToken = refreshToken;
         this.user = user;
         this.profile = profile;
+
+        if (accessToken != null) Logger.registerAccessToken(accessToken);
     }
 
     public String getTokenType() {
@@ -84,7 +87,7 @@ public class MicrosoftSession {
                 .orElseThrow(() -> new IllegalArgumentException("accessToken is missing"));
         String refreshToken = tryCast(storage.get("refreshToken"), String.class)
                 .orElseThrow(() -> new IllegalArgumentException("refreshToken is missing"));
-        Long notAfter = tryCast(storage.get("notAfter"), Long.class).orElse(0L);
+        Long notAfter = tryCast(storage.get("notAfter"), Number.class).map(Number::longValue).orElse(0L);
         String userId = tryCast(storage.get("userid"), String.class)
                 .orElseThrow(() -> new IllegalArgumentException("userid is missing"));
         return new MicrosoftSession(tokenType, accessToken, notAfter, refreshToken, new User(userId), new GameProfile(uuid, name));
@@ -107,7 +110,7 @@ public class MicrosoftSession {
     public AuthInfo toAuthInfo() {
         requireNonNull(profile);
 
-        return new AuthInfo(profile.getName(), profile.getId(), accessToken, "{}");
+        return new AuthInfo(profile.getName(), profile.getId(), accessToken, AuthInfo.USER_TYPE_MSA, "{}");
     }
 
     public static class User {

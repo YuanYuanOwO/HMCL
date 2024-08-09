@@ -28,16 +28,13 @@ import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
 import javafx.beans.value.WeakChangeListener;
 import javafx.beans.value.WritableValue;
-import javafx.fxml.FXMLLoader;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
-import javafx.scene.control.*;
 import javafx.scene.control.ScrollPane;
+import javafx.scene.control.*;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
-import javafx.scene.image.PixelWriter;
-import javafx.scene.image.WritableImage;
 import javafx.scene.input.*;
 import javafx.scene.layout.ColumnConstraints;
 import javafx.scene.layout.Priority;
@@ -46,18 +43,24 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.shape.Rectangle;
 import javafx.scene.text.Text;
 import javafx.scene.text.TextFlow;
+import javafx.stage.Stage;
 import javafx.util.Callback;
 import javafx.util.Duration;
 import javafx.util.StringConverter;
+import org.glavo.png.PNGType;
+import org.glavo.png.PNGWriter;
+import org.glavo.png.javafx.PNGJavaFXUtils;
 import org.jackhuang.hmcl.task.Schedulers;
+import org.jackhuang.hmcl.task.Task;
+import org.jackhuang.hmcl.ui.animation.AnimationUtils;
 import org.jackhuang.hmcl.ui.construct.JFXHyperlink;
-import org.jackhuang.hmcl.util.Logging;
+import org.jackhuang.hmcl.util.Holder;
 import org.jackhuang.hmcl.util.ResourceNotFoundError;
-import org.jackhuang.hmcl.util.i18n.I18n;
 import org.jackhuang.hmcl.util.io.FileUtils;
 import org.jackhuang.hmcl.util.javafx.ExtendedProperties;
 import org.jackhuang.hmcl.util.javafx.SafeStringConverter;
 import org.jackhuang.hmcl.util.platform.OperatingSystem;
+import org.jackhuang.hmcl.util.platform.SystemUtils;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
@@ -70,29 +73,47 @@ import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
 import java.awt.*;
-import java.awt.image.BufferedImage;
 import java.io.*;
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
-import java.util.Objects;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.logging.Level;
 import java.util.stream.Collectors;
 
 import static org.jackhuang.hmcl.util.Lang.thread;
 import static org.jackhuang.hmcl.util.Lang.tryCast;
-import static org.jackhuang.hmcl.util.Logging.LOG;
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 import static org.jackhuang.hmcl.util.i18n.I18n.i18n;
 
 public final class FXUtils {
     private FXUtils() {
+    }
+
+    public static final String DEFAULT_MONOSPACE_FONT = OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS ? "Consolas" : "Monospace";
+
+    private static final Map<String, Image> builtinImageCache = new ConcurrentHashMap<>();
+    private static final Map<String, Path> remoteImageCache = new ConcurrentHashMap<>();
+
+    public static void shutdown() {
+        for (Map.Entry<String, Path> entry : remoteImageCache.entrySet()) {
+            try {
+                Files.deleteIfExists(entry.getValue());
+            } catch (IOException e) {
+                LOG.warning(String.format("Failed to delete cache file %s.", entry.getValue()), e);
+            }
+            remoteImageCache.remove(entry.getKey());
+        }
+
+        builtinImageCache.clear();
     }
 
     public static void runInFX(Runnable runnable) {
@@ -275,18 +296,8 @@ public final class FXUtils {
     }
 
     public static void smoothScrolling(ScrollPane scrollPane) {
-        JFXScrollPane.smoothScrolling(scrollPane);
-    }
-
-    public static void loadFXML(Node node, String absolutePath) {
-        FXMLLoader loader = new FXMLLoader(node.getClass().getResource(absolutePath), I18n.getResourceBundle());
-        loader.setRoot(node);
-        loader.setController(node);
-        try {
-            loader.load();
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
+        if (AnimationUtils.isAnimationEnabled())
+            ScrollUtils.addSmoothScrolling(scrollPane);
     }
 
     public static void installFastTooltip(Node node, Tooltip tooltip) {
@@ -324,7 +335,7 @@ public final class FXUtils {
                     Tooltip.class.getMethod("setHideDelay", Duration.class).invoke(tooltip, new Duration(closeDelay));
                 } catch (ReflectiveOperationException e2) {
                     e.addSuppressed(e2);
-                    Logging.LOG.log(Level.SEVERE, "Cannot install tooltip", e);
+                    LOG.error("Cannot install tooltip", e);
                 }
                 Tooltip.install(node, tooltip);
             }
@@ -357,45 +368,77 @@ public final class FXUtils {
 
     public static void openFolder(File file) {
         if (!FileUtils.makeDirectory(file)) {
-            Logging.LOG.log(Level.SEVERE, "Unable to make directory " + file);
+            LOG.error("Unable to make directory " + file);
             return;
         }
 
         String path = file.getAbsolutePath();
 
-        switch (OperatingSystem.CURRENT_OS) {
-            case OSX:
+        String openCommand;
+        if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS)
+            openCommand = "explorer.exe";
+        else if (OperatingSystem.CURRENT_OS == OperatingSystem.OSX)
+            openCommand = "/usr/bin/open";
+        else if (OperatingSystem.CURRENT_OS.isLinuxOrBSD() && new File("/usr/bin/xdg-open").exists())
+            openCommand = "/usr/bin/xdg-open";
+        else
+            openCommand = null;
+
+        thread(() -> {
+            if (openCommand != null) {
                 try {
-                    Runtime.getRuntime().exec(new String[]{"/usr/bin/open", path});
-                } catch (IOException e) {
-                    Logging.LOG.log(Level.SEVERE, "Unable to open " + path + " by executing /usr/bin/open", e);
+                    int exitCode = SystemUtils.callExternalProcess(openCommand, path);
+
+                    // explorer.exe always return 1
+                    if (exitCode == 0 || (exitCode == 1 && OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS))
+                        return;
+                    else
+                        LOG.warning("Open " + path + " failed with code " + exitCode);
+                } catch (Throwable e) {
+                    LOG.warning("Unable to open " + path + " by executing " + openCommand, e);
                 }
-                break;
-            default:
-                thread(() -> {
-                    if (java.awt.Desktop.isDesktopSupported()) {
-                        try {
-                            java.awt.Desktop.getDesktop().open(file);
-                        } catch (Throwable e) {
-                            Logging.LOG.log(Level.SEVERE, "Unable to open " + path + " by java.awt.Desktop.getDesktop()::open", e);
-                        }
-                    }
-                });
-        }
+            }
+
+            // Fallback to java.awt.Desktop::open
+            try {
+                java.awt.Desktop.getDesktop().open(file);
+            } catch (Throwable e) {
+                LOG.error("Unable to open " + path + " by java.awt.Desktop.getDesktop()::open", e);
+            }
+        });
     }
 
     public static void showFileInExplorer(Path file) {
-        switch (OperatingSystem.CURRENT_OS) {
-            case WINDOWS:
+        String path = file.toAbsolutePath().toString();
+
+        String[] openCommands;
+        if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS)
+            openCommands = new String[]{"explorer.exe", "/select,", path};
+        else if (OperatingSystem.CURRENT_OS == OperatingSystem.OSX)
+            openCommands = new String[]{"/usr/bin/open", "-R", path};
+        else
+            openCommands = null;
+
+        if (openCommands != null) {
+            thread(() -> {
                 try {
-                    Runtime.getRuntime().exec(new String[]{"explorer.exe", "/select,", file.toAbsolutePath().toString()});
-                } catch (IOException e) {
-                    Logging.LOG.log(Level.SEVERE, "Unable to open " + file + " by executing explorer /select", e);
+                    int exitCode = SystemUtils.callExternalProcess(openCommands);
+
+                    // explorer.exe always return 1
+                    if (exitCode == 0 || (exitCode == 1 && OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS))
+                        return;
+                    else
+                        LOG.warning("Show " + path + " in explorer failed with code " + exitCode);
+                } catch (Throwable e) {
+                    LOG.warning("Unable to show " + path + " in explorer", e);
                 }
-                break;
-            default:
-                // Currently unsupported.
-                break;
+
+                // Fallback to open folder
+                openFolder(file.getParent().toFile());
+            });
+        } else {
+            // We do not have a universal method to show file in file manager.
+            openFolder(file.getParent().toFile());
         }
     }
 
@@ -418,34 +461,39 @@ public final class FXUtils {
         if (link == null)
             return;
 
-        if (java.awt.Desktop.isDesktopSupported()) {
-            thread(() -> {
-                if (OperatingSystem.CURRENT_OS == OperatingSystem.LINUX) {
-                    for (String browser : linuxBrowsers) {
-                        try (final InputStream is = Runtime.getRuntime().exec(new String[]{"which", browser}).getInputStream()) {
-                            if (is.read() != -1) {
-                                Runtime.getRuntime().exec(new String[]{browser, link});
-                                return;
-                            }
-                        } catch (Throwable ignored) {
-                        }
-                        Logging.LOG.log(Level.WARNING, "No known browser found");
-                    }
-                }
+        thread(() -> {
+            if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
                 try {
-                    java.awt.Desktop.getDesktop().browse(new URI(link));
+                    Runtime.getRuntime().exec(new String[]{"rundll32.exe", "url.dll,FileProtocolHandler", link});
+                    return;
                 } catch (Throwable e) {
-                    if (OperatingSystem.CURRENT_OS == OperatingSystem.OSX)
-                        try {
-                            Runtime.getRuntime().exec(new String[]{"/usr/bin/open", link});
-                        } catch (IOException ex) {
-                            Logging.LOG.log(Level.WARNING, "Unable to open link: " + link, ex);
-                        }
-                    Logging.LOG.log(Level.WARNING, "Failed to open link: " + link, e);
+                    LOG.warning("An exception occurred while calling rundll32", e);
                 }
-            });
-
-        }
+            }
+            if (OperatingSystem.CURRENT_OS.isLinuxOrBSD()) {
+                for (String browser : linuxBrowsers) {
+                    try (final InputStream is = Runtime.getRuntime().exec(new String[]{"which", browser}).getInputStream()) {
+                        if (is.read() != -1) {
+                            Runtime.getRuntime().exec(new String[]{browser, link});
+                            return;
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                    LOG.warning("No known browser found");
+                }
+            }
+            try {
+                java.awt.Desktop.getDesktop().browse(new URI(link));
+            } catch (Throwable e) {
+                if (OperatingSystem.CURRENT_OS == OperatingSystem.OSX)
+                    try {
+                        Runtime.getRuntime().exec(new String[]{"/usr/bin/open", link});
+                    } catch (IOException ex) {
+                        LOG.warning("Unable to open link: " + link, ex);
+                    }
+                LOG.warning("Failed to open link: " + link, e);
+            }
+        });
     }
 
     public static void showWebDialog(String title, String content) {
@@ -459,14 +507,14 @@ public final class FXUtils {
             stage.setTitle(title);
             stage.showAndWait();
         } catch (NoClassDefFoundError | UnsatisfiedLinkError e) {
-            LOG.log(Level.WARNING, "WebView is missing or initialization failed, use JEditorPane replaced", e);
+            LOG.warning("WebView is missing or initialization failed, use JEditorPane replaced", e);
 
+            SwingUtils.initLookAndFeel();
             SwingUtilities.invokeLater(() -> {
                 final JFrame frame = new JFrame(title);
                 frame.setSize(width, height);
                 frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
                 frame.setLocationByPlatform(true);
-                //noinspection ConstantConditions
                 frame.setIconImage(new ImageIcon(FXUtils.class.getResource("/assets/img/icon.png")).getImage());
                 frame.setLayout(new BorderLayout());
 
@@ -494,20 +542,85 @@ public final class FXUtils {
         }
     }
 
-    public static void bindInt(JFXTextField textField, Property<Number> property) {
-        textField.textProperty().bindBidirectional(property, SafeStringConverter.fromInteger());
+    public static <T> void bind(JFXTextField textField, Property<T> property, StringConverter<T> converter) {
+        textField.setText(converter == null ? (String) property.getValue() : converter.toString(property.getValue()));
+        TextFieldBindingListener<T> listener = new TextFieldBindingListener<>(textField, property, converter);
+        textField.focusedProperty().addListener((ChangeListener<Boolean>) listener);
+        property.addListener(listener);
     }
 
-    public static void unbindInt(JFXTextField textField, Property<Number> property) {
-        textField.textProperty().unbindBidirectional(property);
+    public static void bindInt(JFXTextField textField, Property<Number> property) {
+        bind(textField, property, SafeStringConverter.fromInteger());
     }
 
     public static void bindString(JFXTextField textField, Property<String> property) {
-        textField.textProperty().bindBidirectional(property);
+        bind(textField, property, null);
     }
 
-    public static void unbindString(JFXTextField textField, Property<String> property) {
-        textField.textProperty().unbindBidirectional(property);
+    public static void unbind(JFXTextField textField, Property<?> property) {
+        TextFieldBindingListener<?> listener = new TextFieldBindingListener<>(textField, property, null);
+        textField.focusedProperty().removeListener((ChangeListener<Boolean>) listener);
+        property.removeListener(listener);
+    }
+
+    private static final class TextFieldBindingListener<T> implements ChangeListener<Boolean>, InvalidationListener {
+        private final int hashCode;
+        private final WeakReference<JFXTextField> textFieldRef;
+        private final WeakReference<Property<T>> propertyRef;
+        private final StringConverter<T> converter;
+
+        TextFieldBindingListener(JFXTextField textField, Property<T> property, StringConverter<T> converter) {
+            this.textFieldRef = new WeakReference<>(textField);
+            this.propertyRef = new WeakReference<>(property);
+            this.converter = converter;
+            this.hashCode = System.identityHashCode(textField) ^ System.identityHashCode(property);
+        }
+
+        @Override
+        public void changed(ObservableValue<? extends Boolean> observable, Boolean oldValue, Boolean focused) { // On TextField changed
+            JFXTextField textField = textFieldRef.get();
+            Property<T> property = this.propertyRef.get();
+
+            if (textField != null && property != null && oldValue == Boolean.TRUE && focused == Boolean.FALSE) {
+                if (textField.validate()) {
+                    String newText = textField.getText();
+                    @SuppressWarnings("unchecked")
+                    T newValue = converter == null ? (T) newText : converter.fromString(newText);
+
+                    if (!Objects.equals(newValue, property.getValue()))
+                        property.setValue(newValue);
+                } else {
+                    // Rollback to old value
+                    invalidated(null);
+                }
+            }
+        }
+
+        @Override
+        public void invalidated(Observable observable) { // On property change
+            JFXTextField textField = textFieldRef.get();
+            Property<T> property = this.propertyRef.get();
+
+            if (textField != null && property != null) {
+                T value = property.getValue();
+                textField.setText(converter == null ? (String) value : converter.toString(value));
+            }
+        }
+
+        @Override
+        public int hashCode() {
+            return hashCode;
+        }
+
+        @Override
+        public boolean equals(Object obj) {
+            if (!(obj instanceof TextFieldBindingListener))
+                return false;
+            TextFieldBindingListener<?> other = (TextFieldBindingListener<?>) obj;
+            return this.hashCode == other.hashCode
+                    && this.textFieldRef.get() == other.textFieldRef.get()
+                    && this.propertyRef.get() == other.propertyRef.get();
+        }
     }
 
     public static void bindBoolean(JFXToggleButton toggleButton, Property<Boolean> property) {
@@ -533,16 +646,17 @@ public final class FXUtils {
      * @param comboBox the combo box being bound with {@code property}.
      * @param property the property being bound with {@code combo box}.
      * @see #unbindEnum(JFXComboBox)
-     * @deprecated Use {@link ExtendedProperties#selectedItemPropertyFor(ComboBox)}
+     * @see ExtendedProperties#selectedItemPropertyFor(ComboBox)
      */
-    @SuppressWarnings("unchecked")
-    @Deprecated
-    public static void bindEnum(JFXComboBox<?> comboBox, Property<? extends Enum<?>> property) {
+    public static <T extends Enum<T>> void bindEnum(JFXComboBox<T> comboBox, Property<T> property) {
         unbindEnum(comboBox);
-        @SuppressWarnings("rawtypes")
-        ChangeListener<Number> listener = (a, b, newValue) ->
-                ((Property) property).setValue(property.getValue().getClass().getEnumConstants()[newValue.intValue()]);
-        comboBox.getSelectionModel().select(property.getValue().ordinal());
+
+        T currentValue = property.getValue();
+        @SuppressWarnings("unchecked")
+        T[] enumConstants = (T[]) currentValue.getClass().getEnumConstants();
+        ChangeListener<Number> listener = (a, b, newValue) -> property.setValue(enumConstants[newValue.intValue()]);
+
+        comboBox.getSelectionModel().select(currentValue.ordinal());
         comboBox.getProperties().put("FXUtils.bindEnum.listener", listener);
         comboBox.getSelectionModel().selectedIndexProperty().addListener(listener);
     }
@@ -553,15 +667,23 @@ public final class FXUtils {
      *
      * @param comboBox the combo box being bound with the property which can be inferred by {@code bindEnum}.
      * @see #bindEnum(JFXComboBox, Property)
-     * @deprecated Use {@link ExtendedProperties#selectedItemPropertyFor(ComboBox)}
+     * @see ExtendedProperties#selectedItemPropertyFor(ComboBox)
      */
-    @SuppressWarnings("unchecked")
-    @Deprecated
-    public static void unbindEnum(JFXComboBox<?> comboBox) {
-        @SuppressWarnings("rawtypes")
-        ChangeListener listener = tryCast(comboBox.getProperties().get("FXUtils.bindEnum.listener"), ChangeListener.class).orElse(null);
-        if (listener == null) return;
-        comboBox.getSelectionModel().selectedIndexProperty().removeListener(listener);
+    public static void unbindEnum(JFXComboBox<? extends Enum<?>> comboBox) {
+        @SuppressWarnings("unchecked")
+        ChangeListener<Number> listener = (ChangeListener<Number>) comboBox.getProperties().remove("FXUtils.bindEnum.listener");
+        if (listener != null)
+            comboBox.getSelectionModel().selectedIndexProperty().removeListener(listener);
+    }
+
+    public static void setIcon(Stage stage) {
+        String icon;
+        if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS) {
+            icon = "/assets/img/icon.png";
+        } else {
+            icon = "/assets/img/icon@4x.png";
+        }
+        stage.getIcons().add(newBuiltinImage(icon));
     }
 
     /**
@@ -572,12 +694,125 @@ public final class FXUtils {
      * @see org.jackhuang.hmcl.util.CrashReporter
      * @see ResourceNotFoundError
      */
-    public static Image newImage(String url) {
+    public static Image newBuiltinImage(String url) {
         try {
-            return new Image(url);
+            return builtinImageCache.computeIfAbsent(url, Image::new);
         } catch (IllegalArgumentException e) {
             throw new ResourceNotFoundError("Cannot access image: " + url, e);
         }
+    }
+
+    /**
+     * Suppress IllegalArgumentException since the url is supposed to be correct definitely.
+     *
+     * @param url             the url of image. The image resource should be a file within the jar.
+     * @param requestedWidth  the image's bounding box width
+     * @param requestedHeight the image's bounding box height
+     * @param preserveRatio   indicates whether to preserve the aspect ratio of
+     *                        the original image when scaling to fit the image within the
+     *                        specified bounding box
+     * @param smooth          indicates whether to use a better quality filtering
+     *                        algorithm or a faster one when scaling this image to fit within
+     *                        the specified bounding box
+     * @return the image resource within the jar.
+     * @see org.jackhuang.hmcl.util.CrashReporter
+     * @see ResourceNotFoundError
+     */
+    public static Image newBuiltinImage(String url, double requestedWidth, double requestedHeight, boolean preserveRatio, boolean smooth) {
+        try {
+            return new Image(url, requestedWidth, requestedHeight, preserveRatio, smooth);
+        } catch (IllegalArgumentException e) {
+            throw new ResourceNotFoundError("Cannot access image: " + url, e);
+        }
+    }
+
+    /**
+     * Load image from the internet. It will cache the data of images for the further usage.
+     * The cached data will be deleted when HMCL is closed or hidden.
+     *
+     * @param url the url of image. The image resource should be a file on the internet.
+     * @return the image resource within the jar.
+     */
+    public static Image newRemoteImage(String url) {
+        return newRemoteImage(url, 0, 0, false, false, false);
+    }
+
+    /**
+     * Load image from the internet. It will cache the data of images for the further usage.
+     * The cached data will be deleted when HMCL is closed or hidden.
+     *
+     * @param url             the url of image. The image resource should be a file on the internet.
+     * @param requestedWidth  the image's bounding box width
+     * @param requestedHeight the image's bounding box height
+     * @param preserveRatio   indicates whether to preserve the aspect ratio of
+     *                        the original image when scaling to fit the image within the
+     *                        specified bounding box
+     * @param smooth          indicates whether to use a better quality filtering
+     *                        algorithm or a faster one when scaling this image to fit within
+     *                        the specified bounding box
+     * @return the image resource within the jar.
+     */
+    public static Image newRemoteImage(String url, double requestedWidth, double requestedHeight, boolean preserveRatio, boolean smooth, boolean backgroundLoading) {
+        Path currentPath = remoteImageCache.get(url);
+        if (currentPath != null) {
+            if (Files.isReadable(currentPath)) {
+                try (InputStream inputStream = Files.newInputStream(currentPath)) {
+                    return new Image(inputStream, requestedWidth, requestedHeight, preserveRatio, smooth);
+                } catch (IOException e) {
+                    LOG.warning("An exception encountered while reading data from cached image file.", e);
+                }
+            }
+
+            // The file is unavailable or unreadable.
+            remoteImageCache.remove(url);
+
+            try {
+                Files.deleteIfExists(currentPath);
+            } catch (IOException e) {
+                LOG.warning("An exception encountered while deleting broken cached image file.", e);
+            }
+        }
+
+        Image image = new Image(url, requestedWidth, requestedHeight, preserveRatio, smooth, backgroundLoading);
+        image.progressProperty().addListener((observable, oldValue, newValue) -> {
+            if (newValue.doubleValue() >= 1.0 && !image.isError() && image.getPixelReader() != null && image.getWidth() > 0.0 && image.getHeight() > 0.0) {
+                Task.runAsync(() -> {
+                    Path newPath = Files.createTempFile("hmcl-net-resource-cache-", ".cache");
+                    try ( // Make sure the file is released from JVM before we put the path into remoteImageCache.
+                          OutputStream outputStream = Files.newOutputStream(newPath);
+                          PNGWriter writer = new PNGWriter(outputStream, PNGType.RGBA, PNGWriter.DEFAULT_COMPRESS_LEVEL)
+                    ) {
+                        writer.write(PNGJavaFXUtils.asArgbImage(image));
+                    } catch (IOException e) {
+                        try {
+                            Files.delete(newPath);
+                        } catch (IOException e2) {
+                            e2.addSuppressed(e);
+                            throw e2;
+                        }
+                        throw e;
+                    }
+                    if (remoteImageCache.putIfAbsent(url, newPath) != null) {
+                        Files.delete(newPath); // The image has been loaded in another task. Delete the image here in order not to pollute the tmp folder.
+                    }
+                }).start();
+            }
+        });
+        return image;
+    }
+
+    public static JFXButton newRaisedButton(String text) {
+        JFXButton button = new JFXButton(text);
+        button.getStyleClass().add("jfx-button-raised");
+        button.setButtonType(JFXButton.ButtonType.RAISED);
+        return button;
+    }
+
+    public static JFXButton newBorderButton(String text) {
+        JFXButton button = new JFXButton(text);
+        button.getStyleClass().add("jfx-button-border");
+        button.setButtonType(JFXButton.ButtonType.RAISED);
+        return button;
     }
 
     public static void applyDragListener(Node node, FileFilter filter, Consumer<List<File>> callback) {
@@ -624,10 +859,17 @@ public final class FXUtils {
     }
 
     public static <T> Callback<ListView<T>, ListCell<T>> jfxListCellFactory(Function<T, Node> graphicBuilder) {
+        Holder<Object> lastCell = new Holder<>();
         return view -> new JFXListCell<T>() {
             @Override
             public void updateItem(T item, boolean empty) {
                 super.updateItem(item, empty);
+
+                // https://mail.openjdk.org/pipermail/openjfx-dev/2022-July/034764.html
+                if (this == lastCell.value && !isVisible())
+                    return;
+                lastCell.value = this;
+
                 if (!empty) {
                     setContentDisplay(ContentDisplay.GRAPHIC_ONLY);
                     setGraphic(graphicBuilder.apply(item));
@@ -661,13 +903,6 @@ public final class FXUtils {
         }
     };
 
-    public static Runnable withJFXPopupClosing(Runnable runnable, JFXPopup popup) {
-        return () -> {
-            runnable.run();
-            popup.hide();
-        };
-    }
-
     public static void onEscPressed(Node node, Runnable action) {
         node.addEventHandler(KeyEvent.KEY_PRESSED, e -> {
             if (e.getCode() == KeyCode.ESCAPE) {
@@ -677,31 +912,20 @@ public final class FXUtils {
         });
     }
 
-    // Based on https://stackoverflow.com/a/57552025
-    // Fix #874: Use it instead of SwingFXUtils.toFXImage
-    public static WritableImage toFXImage(BufferedImage image) {
-        WritableImage wr = new WritableImage(image.getWidth(), image.getHeight());
-        PixelWriter pw = wr.getPixelWriter();
-
-        final int iw = image.getWidth();
-        final int ih = image.getHeight();
-        for (int x = 0; x < iw; x++) {
-            for (int y = 0; y < ih; y++) {
-                pw.setArgb(x, y, image.getRGB(x, y));
-            }
-        }
-        return wr;
-    }
-
     public static void copyText(String text) {
         ClipboardContent content = new ClipboardContent();
         content.putString(text);
         Clipboard.getSystemClipboard().setContent(content);
 
-        Controllers.showToast(i18n("message.copied"));
+        if (!Controllers.isStopped()) {
+            Controllers.showToast(i18n("message.copied"));
+        }
     }
 
     public static List<Node> parseSegment(String segment, Consumer<String> hyperlinkAction) {
+        if (segment.indexOf('<') < 0)
+            return Collections.singletonList(new Text(segment));
+
         try {
             DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
             DocumentBuilder builder = factory.newDocumentBuilder();
@@ -718,7 +942,14 @@ public final class FXUtils {
                     if ("a".equals(element.getTagName())) {
                         String href = element.getAttribute("href");
                         JFXHyperlink hyperlink = new JFXHyperlink(element.getTextContent());
-                        hyperlink.setOnAction(e -> hyperlinkAction.accept(href));
+                        hyperlink.setOnAction(e -> {
+                            String link = href;
+                            try {
+                                link = new URI(href).toASCIIString();
+                            } catch (URISyntaxException ignored) {
+                            }
+                            hyperlinkAction.accept(link);
+                        });
                         texts.add(hyperlink);
                     } else if ("b".equals(element.getTagName())) {
                         Text text = new Text(element.getTextContent());
@@ -735,7 +966,7 @@ public final class FXUtils {
             }
             return texts;
         } catch (SAXException | ParserConfigurationException | IOException e) {
-            LOG.log(Level.WARNING, "Failed to parse xml", e);
+            LOG.warning("Failed to parse xml", e);
             return Collections.singletonList(new Text(segment));
         }
     }

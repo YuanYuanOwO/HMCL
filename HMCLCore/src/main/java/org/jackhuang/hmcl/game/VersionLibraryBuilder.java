@@ -21,7 +21,10 @@ import org.jackhuang.hmcl.util.StringUtils;
 import org.jackhuang.hmcl.util.platform.CommandBuilder;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  *
@@ -48,14 +51,24 @@ public final class VersionLibraryBuilder {
     public Version build() {
         Version ret = version;
         if (useMcArgs) {
+            // The official launcher will not parse the "arguments" property when it detects the presence of "mcArgs".
+            // The "arguments" property with the "rule" is simply ignored here.
+            this.mcArgs.addAll(this.game.stream().map(arg -> arg.toString(new HashMap<>(), new HashMap<>())).flatMap(Collection::stream).collect(Collectors.toList()));
+            ret = ret.setArguments(null);
+
             // Since $ will be escaped in linux, and our maintain of minecraftArgument will not cause escaping,
             // so we regenerate the minecraftArgument without escaping.
             ret = ret.setMinecraftArguments(new CommandBuilder().addAllWithoutParsing(mcArgs).toString());
+        } else {
+            ret = ret.setArguments(ret.getArguments()
+                    .map(args -> args.withGame(game))
+                    .map(args -> jvmChanged ? args.withJvm(jvm) : args).orElse(new Arguments(game, jvmChanged ? jvm : null)));
         }
-        return ret.setArguments(ret.getArguments()
-                .map(args -> args.withGame(game))
-                .map(args -> jvmChanged ? args.withJvm(jvm) : args).orElse(new Arguments(game, jvmChanged ? jvm : null)))
-                .setLibraries(libraries);
+        return ret.setLibraries(libraries);
+    }
+
+    public boolean hasTweakClass(String tweakClass) {
+        return useMcArgs && mcArgs.contains(tweakClass) || game.stream().anyMatch(arg -> arg.toString().equals(tweakClass));
     }
 
     public void removeTweakClass(String target) {
@@ -94,6 +107,20 @@ public final class VersionLibraryBuilder {
      * @param inPlace if true, replace the tweak class in place, otherwise add the tweak class to the end of the argument list without replacement.
      */
     public void replaceTweakClass(String target, String replacement, boolean inPlace) {
+        replaceTweakClass(target, replacement, inPlace, false);
+    }
+
+    /**
+     * Replace existing tweak class.
+     * If the tweak class does not exist, the new tweak class will be added to argument list.
+     * If the tweak class appears more than one time, the tweak classes will be removed excluding the first one.
+     *
+     * @param target the tweak class to replace
+     * @param replacement the new tweak class to be replaced with, if null, remove the tweak class only
+     * @param inPlace if true, replace the tweak class in place, otherwise add the tweak class to the end of the argument list without replacement.
+     * @param reserve if true, add the tweak class to the start of the argument list.
+     */
+    public void replaceTweakClass(String target, String replacement, boolean inPlace, boolean reserve) {
         if (replacement == null && inPlace)
             throw new IllegalArgumentException("Replacement cannot be null in replace mode");
 
@@ -102,7 +129,7 @@ public final class VersionLibraryBuilder {
             for (int i = 0; i + 1 < mcArgs.size(); ++i) {
                 String arg0Str = mcArgs.get(i);
                 String arg1Str = mcArgs.get(i + 1);
-                if (arg0Str.equals("--tweakClass") && arg1Str.toLowerCase().contains(target)) {
+                if (arg0Str.equals("--tweakClass") && arg1Str.equals(target)) {
                     if (!replaced && inPlace) {
                         // for the first one, we replace the tweak class only.
                         mcArgs.set(i + 1, replacement);
@@ -124,7 +151,7 @@ public final class VersionLibraryBuilder {
                 // We need to preserve the tokens
                 String arg0Str = arg0.toString();
                 String arg1Str = arg1.toString();
-                if (arg0Str.equals("--tweakClass") && arg1Str.toLowerCase().contains(target)) {
+                if (arg0Str.equals("--tweakClass") && arg1Str.equals(target)) {
                     if (!replaced && inPlace) {
                         // for the first one, we replace the tweak class only.
                         game.set(i + 1, new StringArgument(replacement));
@@ -141,8 +168,18 @@ public final class VersionLibraryBuilder {
 
         // if the tweak class does not exist, add a new one to the end.
         if (!replaced && replacement != null) {
-            game.add(new StringArgument("--tweakClass"));
-            game.add(new StringArgument(replacement));
+            if (reserve) {
+                if (useMcArgs) {
+                    mcArgs.add(0, replacement);
+                    mcArgs.add(0, "--tweakClass");
+                } else {
+                    game.add(0, new StringArgument(replacement));
+                    game.add(0, new StringArgument("--tweakClass"));
+                }
+            } else {
+                game.add(new StringArgument("--tweakClass"));
+                game.add(new StringArgument(replacement));
+            }
         }
     }
 

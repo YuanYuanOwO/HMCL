@@ -26,11 +26,12 @@ import java.net.HttpURLConnection;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
-public class HttpMultipartRequest implements Closeable {
+public final class HttpMultipartRequest implements Closeable {
+    private static final byte[] ENDL = {'\r', '\n'};
+
     private final String boundary = "*****" + System.currentTimeMillis() + "*****";
     private final HttpURLConnection urlConnection;
     private final ByteArrayOutputStream stream;
-    private final String endl = "\r\n";
 
     public HttpMultipartRequest(HttpURLConnection urlConnection) throws IOException {
         this.urlConnection = urlConnection;
@@ -43,7 +44,7 @@ public class HttpMultipartRequest implements Closeable {
 
     private void addLine(String content) throws IOException {
         stream.write(content.getBytes(UTF_8));
-        stream.write(endl.getBytes(UTF_8));
+        stream.write(ENDL);
     }
 
     public HttpMultipartRequest file(String name, String filename, String contentType, InputStream inputStream) throws IOException {
@@ -69,7 +70,7 @@ public class HttpMultipartRequest implements Closeable {
         addLine("--" + boundary + "--");
         urlConnection.setRequestProperty("Content-Length", "" + stream.size());
         try (OutputStream os = urlConnection.getOutputStream()) {
-            IOUtils.write(stream.toByteArray(), os);
+            stream.writeTo(os);
         }
     }
 }

@@ -51,7 +51,7 @@ public final class Config implements Cloneable, Observable {
 
     public static final int CURRENT_UI_VERSION = 0;
 
-    private static final Gson CONFIG_GSON = new GsonBuilder()
+    public static final Gson CONFIG_GSON = new GsonBuilder()
             .registerTypeAdapter(File.class, FileTypeAdapter.INSTANCE)
             .registerTypeAdapter(ObservableList.class, new ObservableListCreator())
             .registerTypeAdapter(ObservableSet.class, new ObservableSetCreator())
@@ -112,6 +112,12 @@ public final class Config implements Cloneable, Observable {
     @SerializedName("proxyPassword")
     private StringProperty proxyPass = new SimpleStringProperty();
 
+    @SerializedName("x")
+    private DoubleProperty x = new SimpleDoubleProperty();
+
+    @SerializedName("y")
+    private DoubleProperty y = new SimpleDoubleProperty();
+
     @SerializedName("width")
     private DoubleProperty width = new SimpleDoubleProperty();
 
@@ -119,19 +125,19 @@ public final class Config implements Cloneable, Observable {
     private DoubleProperty height = new SimpleDoubleProperty();
 
     @SerializedName("theme")
-    private ObjectProperty<Theme> theme = new SimpleObjectProperty<>(Theme.BLUE);
+    private ObjectProperty<Theme> theme = new SimpleObjectProperty<>();
 
     @SerializedName("localization")
     private ObjectProperty<SupportedLocale> localization = new SimpleObjectProperty<>(Locales.DEFAULT);
 
     @SerializedName("autoDownloadThreads")
-    private BooleanProperty autoDownloadThreads = new SimpleBooleanProperty(false);
+    private BooleanProperty autoDownloadThreads = new SimpleBooleanProperty(true);
 
     @SerializedName("downloadThreads")
     private IntegerProperty downloadThreads = new SimpleIntegerProperty(64);
 
     @SerializedName("downloadType")
-    private StringProperty downloadType = new SimpleStringProperty("mcbbs");
+    private StringProperty downloadType = new SimpleStringProperty(DownloadProviders.DEFAULT_RAW_PROVIDER_ID);
 
     @SerializedName("autoChooseDownloadType")
     private BooleanProperty autoChooseDownloadType = new SimpleBooleanProperty(true);
@@ -140,13 +146,16 @@ public final class Config implements Cloneable, Observable {
     private StringProperty versionListSource = new SimpleStringProperty("balanced");
 
     @SerializedName("configurations")
-    private ObservableMap<String, Profile> configurations = FXCollections.observableMap(new TreeMap<>());
+    private SimpleMapProperty<String, Profile> configurations = new SimpleMapProperty<>(FXCollections.observableMap(new TreeMap<>()));
+
+    @SerializedName("selectedAccount")
+    private StringProperty selectedAccount = new SimpleStringProperty();
 
     @SerializedName("accounts")
     private ObservableList<Map<Object, Object>> accountStorages = FXCollections.observableArrayList();
 
     @SerializedName("fontFamily")
-    private StringProperty fontFamily = new SimpleStringProperty("Consolas");
+    private StringProperty fontFamily = new SimpleStringProperty();
 
     @SerializedName("fontSize")
     private DoubleProperty fontSize = new SimpleDoubleProperty(12);
@@ -155,13 +164,16 @@ public final class Config implements Cloneable, Observable {
     private StringProperty launcherFontFamily = new SimpleStringProperty();
 
     @SerializedName("logLines")
-    private IntegerProperty logLines = new SimpleIntegerProperty(100);
+    private IntegerProperty logLines = new SimpleIntegerProperty(1000);
 
     @SerializedName("titleTransparent")
     private BooleanProperty titleTransparent = new SimpleBooleanProperty(false);
 
     @SerializedName("authlibInjectorServers")
     private ObservableList<AuthlibInjectorServer> authlibInjectorServers = FXCollections.observableArrayList(server -> new Observable[] { server });
+
+    @SerializedName("addedLittleSkin")
+    private BooleanProperty addedLittleSkin = new SimpleBooleanProperty(false);
 
     @SerializedName("promptedVersion")
     private StringProperty promptedVersion = new SimpleStringProperty();
@@ -184,6 +196,12 @@ public final class Config implements Cloneable, Observable {
      */
     @SerializedName("preferredLoginType")
     private StringProperty preferredLoginType = new SimpleStringProperty();
+
+    @SerializedName("animationDisabled")
+    private BooleanProperty animationDisabled = new SimpleBooleanProperty();
+
+    @SerializedName("shownTips")
+    private ObservableMap<String, Object> shownTips = FXCollections.observableHashMap();
 
     private transient ObservableHelper helper = new ObservableHelper(this);
 
@@ -367,6 +385,30 @@ public final class Config implements Cloneable, Observable {
         return proxyPass;
     }
 
+    public double getX() {
+        return x.get();
+    }
+
+    public DoubleProperty xProperty() {
+        return x;
+    }
+
+    public void setX(double x) {
+        this.x.set(x);
+    }
+
+    public double getY() {
+        return y.get();
+    }
+
+    public DoubleProperty yProperty() {
+        return y;
+    }
+
+    public void setY(double y) {
+        this.y.set(y);
+    }
+
     public double getWidth() {
         return width.get();
     }
@@ -475,8 +517,20 @@ public final class Config implements Cloneable, Observable {
         return versionListSource;
     }
 
-    public ObservableMap<String, Profile> getConfigurations() {
+    public MapProperty<String, Profile> getConfigurations() {
         return configurations;
+    }
+
+    public String getSelectedAccount() {
+        return selectedAccount.get();
+    }
+
+    public void setSelectedAccount(String selectedAccount) {
+        this.selectedAccount.set(selectedAccount);
+    }
+
+    public StringProperty selectedAccountProperty() {
+        return selectedAccount;
     }
 
     public ObservableList<Map<Object, Object>> getAccountStorages() {
@@ -535,6 +589,18 @@ public final class Config implements Cloneable, Observable {
         return authlibInjectorServers;
     }
 
+    public boolean isAddedLittleSkin() {
+        return addedLittleSkin.get();
+    }
+
+    public BooleanProperty addedLittleSkinProperty() {
+        return addedLittleSkin;
+    }
+
+    public void setAddedLittleSkin(boolean addedLittleSkin) {
+        this.addedLittleSkin.set(addedLittleSkin);
+    }
+
     public int getConfigVersion() {
         return configVersion.get();
     }
@@ -571,6 +637,18 @@ public final class Config implements Cloneable, Observable {
         return preferredLoginType;
     }
 
+    public boolean isAnimationDisabled() {
+        return animationDisabled.get();
+    }
+
+    public BooleanProperty animationDisabledProperty() {
+        return animationDisabled;
+    }
+
+    public void setAnimationDisabled(boolean animationDisabled) {
+        this.animationDisabled.set(animationDisabled);
+    }
+
     public boolean isTitleTransparent() {
         return titleTransparent.get();
     }
@@ -593,5 +671,9 @@ public final class Config implements Cloneable, Observable {
 
     public void setPromptedVersion(String promptedVersion) {
         this.promptedVersion.set(promptedVersion);
+    }
+
+    public ObservableMap<String, Object> getShownTips() {
+        return shownTips;
     }
 }

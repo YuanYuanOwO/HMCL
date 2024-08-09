@@ -3,6 +3,7 @@
 #include "os.h"
 #include "java.h"
 #include "lang.h"
+#include <windows.h>
 
 Version J8(TEXT("8"));
 
@@ -11,29 +12,51 @@ _declspec(dllexport) DWORD NvOptimusEnablement = 0x00000001;
 _declspec(dllexport) DWORD AmdPowerXpressRequestHighPerformance = 0x00000001;
 }
 
+LPCWSTR VENDOR_DIRS[] = {
+  L"Java", L"Microsoft", L"BellSoft", L"Zulu", L"Eclipse Foundation", L"AdoptOpenJDK", L"Semeru"
+};
+
 void RawLaunchJVM(const std::wstring &javaPath, const std::wstring &workdir,
-                  const std::wstring &jarPath) {
-  if (MyCreateProcess(
-          L"\"" + javaPath +
-              L"\" -XX:MinHeapFreeRatio=5 -XX:MaxHeapFreeRatio=15 -jar \"" +
-              jarPath + L"\"",
-          workdir))
+                  const std::wstring &jarPath, const std::wstring &jvmOptions) {
+  if (MyCreateProcess(L"\"" + javaPath + L"\" " + jvmOptions + L" -jar \"" + jarPath + L"\"", workdir))
     exit(EXIT_SUCCESS);
 }
 
 void LaunchJVM(const std::wstring &javaPath, const std::wstring &workdir,
-               const std::wstring &jarPath) {
+               const std::wstring &jarPath, const std::wstring &jvmOptions) {
   Version javaVersion(L"");
   if (!MyGetFileVersionInfo(javaPath, javaVersion)) return;
 
   if (J8 <= javaVersion) {
-    RawLaunchJVM(javaPath, workdir, jarPath);
+    RawLaunchJVM(javaPath, workdir, jarPath, jvmOptions);
   }
+}
+
+void FindJavaInDirAndLaunchJVM(const std::wstring &baseDir, const std::wstring &workdir,
+                               const std::wstring &jarPath, const std::wstring &jvmOptions) {
+  std::wstring pattern = baseDir + L"*";
+
+  WIN32_FIND_DATA data;
+  HANDLE hFind = FindFirstFile(pattern.c_str(), &data);  // Search all subdirectory
+
+  if (hFind != INVALID_HANDLE_VALUE) {
+    do {
+      std::wstring javaw = baseDir + data.cFileName + std::wstring(L"\\bin\\javaw.exe");
+      if (FindFirstFileExists(javaw.c_str(), 0)) {
+        LaunchJVM(javaw, workdir, jarPath, jvmOptions);
+      }
+    } while (FindNextFile(hFind, &data));
+    FindClose(hFind);
+  }
+}
+
+void OpenHelpPage() {
+    ShellExecute(0, 0, L"https://docs.hmcl.net/help.html", 0, 0, SW_SHOW);
 }
 
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                       LPWSTR lpCmdLine, int nCmdShow) {
-  std::wstring path, exeName;
+  std::wstring path, exeName, jvmOptions;
 
   // Since Jar file is appended to this executable, we should first get the
   // location of JAR file.
@@ -46,60 +69,88 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     exeName = exeName.substr(last_slash + 1);
   }
 
+  if (ERROR_SUCCESS != MyGetEnvironmentVariable(L"HMCL_JAVA_OPTS", jvmOptions)) {
+    jvmOptions = L"-XX:MinHeapFreeRatio=5 -XX:MaxHeapFreeRatio=15"; // Default Options
+  }
+
+  bool useChinese = GetUserDefaultUILanguage() == 2052; // zh-CN
+
+  SYSTEM_INFO systemInfo;
+  GetNativeSystemInfo(&systemInfo);
   // TODO: check whether the bundled JRE is valid.
   // First try the Java packaged together.
-  bool is64Bit = false;
-  GetArch(is64Bit);  // if failed to determine architecture of operating system,
-                     // consider 32-bit.
+  bool isX64   = (systemInfo.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64);
+  bool isARM64 = (systemInfo.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64);
 
-  if (is64Bit) {
-    RawLaunchJVM(L"jre-x64\\bin\\javaw.exe", workdir, exeName);
-  } else {
-    RawLaunchJVM(L"jre-x86\\bin\\javaw.exe", workdir, exeName);
+  if (isARM64) {
+    RawLaunchJVM(L"jre-arm64\\bin\\javaw.exe", workdir, exeName, jvmOptions);
+  }
+  if (isX64) {
+    RawLaunchJVM(L"jre-x64\\bin\\javaw.exe", workdir, exeName, jvmOptions);
+  }
+  RawLaunchJVM(L"jre-x86\\bin\\javaw.exe", workdir, exeName, jvmOptions);
+
+  if (FindJava(path)) LaunchJVM(path + L"\\bin\\javaw.exe", workdir, exeName, jvmOptions);
+
+  std::wstring programFiles;
+
+  // Or we try to search Java in C:\Program Files
+  if (!SUCCEEDED(MySHGetFolderPath(CSIDL_PROGRAM_FILES, programFiles))) programFiles = L"C:\\Program Files\\";
+  for (LPCWSTR vendorDir : VENDOR_DIRS) {
+    std::wstring dir = programFiles;
+    MyPathAppend(dir, vendorDir);
+    MyPathAddBackslash(dir);
+
+    FindJavaInDirAndLaunchJVM(dir, workdir, exeName, jvmOptions);
   }
 
-  if (FindJava(path)) LaunchJVM(path + L"\\bin\\javaw.exe", workdir, exeName);
+  // Consider C:\Program Files (x86)
+  if (!SUCCEEDED(MySHGetFolderPath(CSIDL_PROGRAM_FILESX86, programFiles))) programFiles = L"C:\\Program Files (x86)\\";
+  for (LPCWSTR vendorDir : VENDOR_DIRS) {
+    std::wstring dir = programFiles;
+    MyPathAppend(dir, vendorDir);
+    MyPathAddBackslash(dir);
 
-  // Or we try to search Java in C:\Program Files.
-  {
-    WIN32_FIND_DATA data;
-    HANDLE hFind = FindFirstFile(L"C:\\Program Files\\Java\\*",
-                                 &data);  // Search all subdirectory
-
-    if (hFind != INVALID_HANDLE_VALUE) {
-      do {
-        std::wstring javaw = std::wstring(L"C:\\Program Files\\Java\\") +
-                             data.cFileName + std::wstring(L"\\bin\\javaw.exe");
-        if (FindFirstFileExists(javaw.c_str(), 0)) {
-          LaunchJVM(javaw, workdir, exeName);
-        }
-      } while (FindNextFile(hFind, &data));
-      FindClose(hFind);
-    }
-  }
-
-  // Consider C:\Program Files (x86)\Java
-  {
-    WIN32_FIND_DATA data;
-    HANDLE hFind = FindFirstFile(L"C:\\Program Files (x86)\\Java\\*",
-                                 &data);  // Search all subdirectory
-
-    if (hFind != INVALID_HANDLE_VALUE) {
-      do {
-        std::wstring javaw = std::wstring(L"C:\\Program Files (x86)\\Java\\") +
-                             data.cFileName + L"\\bin\\javaw.exe";
-        if (FindFirstFileExists(javaw.c_str(), 0)) {
-          LaunchJVM(javaw, workdir, exeName);
-        }
-      } while (FindNextFile(hFind, &data));
-      FindClose(hFind);
-    }
+    FindJavaInDirAndLaunchJVM(dir, workdir, exeName, jvmOptions);
   }
 
   // Try java in PATH
-  RawLaunchJVM(L"javaw", workdir, exeName);
+  RawLaunchJVM(L"javaw", workdir, exeName, jvmOptions);
 
-  MessageBox(NULL, ERROR_PROMPT, L"Error", MB_ICONERROR | MB_OK);
-  ShellExecute(0, 0, L"https://java.com/", 0, 0, SW_SHOW);
+  std::wstring hmclJavaDir;
+  {
+    std::wstring buffer;
+    if (SUCCEEDED(MySHGetFolderPath(CSIDL_APPDATA, buffer)) || SUCCEEDED(MySHGetFolderPath(CSIDL_PROFILE, buffer))) {
+      MyPathAppend(buffer, L".hmcl");
+      MyPathAppend(buffer, L"java");
+      if (isARM64) {
+        MyPathAppend(buffer, L"windows-arm64");
+      } else if (isX64) {
+        MyPathAppend(buffer, L"windows-x86_64");
+      } else {
+        MyPathAppend(buffer, L"windows-x86");
+      }
+      MyPathAddBackslash(buffer);
+      hmclJavaDir = buffer;
+    }
+  }
+
+  if (!hmclJavaDir.empty()) {
+    FindJavaInDirAndLaunchJVM(hmclJavaDir, workdir, exeName, jvmOptions);
+  }
+
+  LPCWSTR downloadLink;
+
+  if (isARM64) {
+    downloadLink = L"https://docs.hmcl.net/downloads/windows/arm64.html";
+  } if (isX64) {
+    downloadLink = L"https://docs.hmcl.net/downloads/windows/x86_64.html";
+  } else {
+    downloadLink = L"https://docs.hmcl.net/downloads/windows/x86.html";
+  }
+
+  if (IDOK == MessageBox(NULL, useChinese ? ERROR_PROMPT_ZH : ERROR_PROMPT, useChinese ? ERROR_TITLE_ZH : ERROR_TITLE, MB_ICONWARNING | MB_OKCANCEL)) {
+    ShellExecute(0, 0, downloadLink, 0, 0, SW_SHOW);
+  }
   return 1;
 }

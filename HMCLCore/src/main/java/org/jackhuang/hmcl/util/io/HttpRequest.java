@@ -21,6 +21,7 @@ import com.google.gson.JsonParseException;
 import org.jackhuang.hmcl.task.Schedulers;
 import org.jackhuang.hmcl.util.Pair;
 import org.jackhuang.hmcl.util.function.ExceptionalBiConsumer;
+import org.jackhuang.hmcl.util.function.ExceptionalSupplier;
 import org.jackhuang.hmcl.util.gson.JsonUtils;
 
 import java.io.IOException;
@@ -29,7 +30,6 @@ import java.lang.reflect.Type;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -49,6 +49,7 @@ public abstract class HttpRequest {
     protected final Map<String, String> headers = new HashMap<>();
     protected ExceptionalBiConsumer<URL, Integer, IOException> responseCodeTester;
     protected final Set<Integer> toleratedHttpCodes = new HashSet<>();
+    protected int retryTimes = 1;
     protected boolean ignoreHttpCode;
 
     private HttpRequest(String url, String method) {
@@ -79,6 +80,14 @@ public abstract class HttpRequest {
 
     public HttpRequest ignoreHttpCode() {
         ignoreHttpCode = true;
+        return this;
+    }
+
+    public HttpRequest retry(int retryTimes) {
+        if (retryTimes < 1) {
+            throw new IllegalArgumentException("retryTimes >= 1");
+        }
+        this.retryTimes = retryTimes;
         return this;
     }
 
@@ -129,9 +138,11 @@ public abstract class HttpRequest {
         }
 
         public String getString() throws IOException {
-            HttpURLConnection con = createConnection();
-            con = resolveConnection(con);
-            return IOUtils.readFullyAsString(con.getInputStream(), StandardCharsets.UTF_8);
+            return getStringWithRetry(() -> {
+                HttpURLConnection con = createConnection();
+                con = resolveConnection(con);
+                return IOUtils.readFullyAsString("gzip".equals(con.getContentEncoding()) ? IOUtils.wrapFromGZip(con.getInputStream()) : con.getInputStream());
+            }, retryTimes);
         }
     }
 
@@ -168,25 +179,32 @@ public abstract class HttpRequest {
         }
 
         public String getString() throws IOException {
-            HttpURLConnection con = createConnection();
-            con.setDoOutput(true);
+            return getStringWithRetry(() -> {
+                HttpURLConnection con = createConnection();
+                con.setDoOutput(true);
 
-            try (OutputStream os = con.getOutputStream()) {
-                os.write(bytes);
-            }
+                try (OutputStream os = con.getOutputStream()) {
+                    os.write(bytes);
+                }
 
-            if (responseCodeTester != null) {
-                responseCodeTester.accept(new URL(url), con.getResponseCode());
-            } else {
-                if (con.getResponseCode() / 100 != 2) {
-                    if (!ignoreHttpCode && !toleratedHttpCodes.contains(con.getResponseCode())) {
-                        String data = NetworkUtils.readData(con);
-                        throw new ResponseCodeException(new URL(url), con.getResponseCode(), data);
+                URL url = new URL(this.url);
+
+                if (responseCodeTester != null) {
+                    responseCodeTester.accept(url, con.getResponseCode());
+                } else {
+                    if (con.getResponseCode() / 100 != 2) {
+                        if (!ignoreHttpCode && !toleratedHttpCodes.contains(con.getResponseCode())) {
+                            try {
+                                throw new ResponseCodeException(url, con.getResponseCode(), NetworkUtils.readData(con));
+                            } catch (IOException e) {
+                                throw new ResponseCodeException(url, con.getResponseCode(), e);
+                            }
+                        }
                     }
                 }
-            }
 
-            return NetworkUtils.readData(con);
+                return NetworkUtils.readData(con);
+            }, retryTimes);
         }
     }
 
@@ -201,6 +219,25 @@ public abstract class HttpRequest {
 
     public static HttpPostRequest POST(String url) throws MalformedURLException {
         return new HttpPostRequest(url);
+    }
+
+    private static String getStringWithRetry(ExceptionalSupplier<String, IOException> supplier, int retryTimes) throws IOException {
+        Throwable exception = null;
+        for (int i = 0; i < retryTimes; i++) {
+            try {
+                return supplier.get();
+            } catch (Throwable e) {
+                exception = e;
+            }
+        }
+        if (exception != null) {
+            if (exception instanceof IOException) {
+                throw (IOException) exception;
+            } else {
+                throw new IOException(exception);
+            }
+        }
+        throw new IOException("retry 0");
     }
 
     public interface Authorization {

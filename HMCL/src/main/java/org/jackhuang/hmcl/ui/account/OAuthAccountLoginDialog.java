@@ -21,9 +21,8 @@ import org.jackhuang.hmcl.ui.construct.JFXHyperlink;
 import org.jackhuang.hmcl.ui.construct.MessageDialogPane;
 
 import java.util.function.Consumer;
-import java.util.logging.Level;
 
-import static org.jackhuang.hmcl.util.Logging.LOG;
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 import static org.jackhuang.hmcl.util.i18n.I18n.i18n;
 
 public class OAuthAccountLoginDialog extends DialogPane {
@@ -48,9 +47,15 @@ public class OAuthAccountLoginDialog extends DialogPane {
         FXUtils.onChangeAndOperate(deviceCode, deviceCode -> {
             if (deviceCode != null) {
                 FXUtils.copyText(deviceCode.getUserCode());
-                hintPane.setSegment(i18n("account.methods.microsoft.manual", deviceCode.getUserCode(), deviceCode.getVerificationUri()));
+                hintPane.setSegment(
+                        "<b>" + i18n("account.login.refresh.microsoft.hint") + "</b>\n"
+                                + i18n("account.methods.microsoft.manual", deviceCode.getUserCode(), deviceCode.getVerificationUri())
+                );
             } else {
-                hintPane.setSegment(i18n("account.methods.microsoft.hint"));
+                hintPane.setSegment(
+                        "<b>" + i18n("account.login.refresh.microsoft.hint") + "</b>\n"
+                                + i18n("account.methods.microsoft.hint")
+                );
             }
         });
         hintPane.setOnMouseClicked(e -> {
@@ -61,10 +66,10 @@ public class OAuthAccountLoginDialog extends DialogPane {
 
         HBox box = new HBox(8);
         JFXHyperlink birthLink = new JFXHyperlink(i18n("account.methods.microsoft.birth"));
-        birthLink.setOnAction(e -> FXUtils.openLink("https://support.microsoft.com/zh-cn/account-billing/如何更改-microsoft-帐户上的出生日期-837badbc-999e-54d2-2617-d19206b9540a"));
+        birthLink.setOnAction(e -> FXUtils.openLink("https://support.microsoft.com/account-billing/how-to-change-a-birth-date-on-a-microsoft-account-837badbc-999e-54d2-2617-d19206b9540a"));
         JFXHyperlink profileLink = new JFXHyperlink(i18n("account.methods.microsoft.profile"));
         profileLink.setOnAction(e -> FXUtils.openLink("https://account.live.com/editprof.aspx"));
-        JFXHyperlink purchaseLink = new JFXHyperlink(i18n("account.methods.yggdrasil.purchase"));
+        JFXHyperlink purchaseLink = new JFXHyperlink(i18n("account.methods.microsoft.purchase"));
         purchaseLink.setOnAction(e -> FXUtils.openLink(YggdrasilService.PURCHASE_URL));
         box.getChildren().setAll(profileLink, birthLink, purchaseLink);
         GridPane.setColumnSpan(box, 2);
@@ -90,7 +95,7 @@ public class OAuthAccountLoginDialog extends DialogPane {
                         success.accept(authInfo);
                         onSuccess();
                     } else {
-                        LOG.log(Level.INFO, "Failed to login when credentials expired: " + account, exception);
+                        LOG.info("Failed to login when credentials expired: " + account, exception);
                         onFailure(Accounts.localizeErrorMessage(exception));
                     }
                 }).start();

@@ -24,12 +24,11 @@ import org.jackhuang.hmcl.util.javafx.BindingMapping;
 
 import java.nio.file.Path;
 import java.util.*;
-import java.util.logging.Level;
 
 import static java.util.Objects.requireNonNull;
-import static org.jackhuang.hmcl.util.Logging.LOG;
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
-public class YggdrasilAccount extends ClassicAccount {
+public abstract class YggdrasilAccount extends ClassicAccount {
 
     protected final YggdrasilService service;
     protected final UUID characterUUID;
@@ -99,6 +98,11 @@ public class YggdrasilAccount extends ClassicAccount {
     }
 
     @Override
+    public String getIdentifier() {
+        return getUsername() + ":" + getUUID();
+    }
+
+    @Override
     public synchronized AuthInfo logIn() throws AuthenticationException {
         if (!authenticated) {
             if (service.validate(session.getAccessToken(), session.getClientToken())) {
@@ -161,8 +165,8 @@ public class YggdrasilAccount extends ClassicAccount {
     }
 
     @Override
-    public Optional<AuthInfo> playOffline() {
-        return Optional.of(session.toAuthInfo());
+    public AuthInfo playOffline() throws AuthenticationException {
+        return session.toAuthInfo();
     }
 
     @Override
@@ -192,7 +196,7 @@ public class YggdrasilAccount extends ClassicAccount {
                     try {
                         return YggdrasilService.getTextures(it);
                     } catch (ServerResponseMalformedException e) {
-                        LOG.log(Level.WARNING, "Failed to parse texture payload", e);
+                        LOG.warning("Failed to parse texture payload", e);
                         return Optional.empty();
                     }
                 }));
@@ -223,6 +227,6 @@ public class YggdrasilAccount extends ClassicAccount {
         if (obj == null || obj.getClass() != YggdrasilAccount.class)
             return false;
         YggdrasilAccount another = (YggdrasilAccount) obj;
-        return characterUUID.equals(another.characterUUID);
+        return isPortable() == another.isPortable() && characterUUID.equals(another.characterUUID);
     }
 }

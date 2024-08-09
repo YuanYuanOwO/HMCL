@@ -96,7 +96,7 @@ public final class ModpackInfoPage extends Control implements WizardPage {
         launchArguments.set(versionSetting.getMinecraftArgs());
         javaArguments.set(versionSetting.getJavaArgs());
 
-        canIncludeLauncher = JarUtils.thisJar().isPresent();
+        canIncludeLauncher = JarUtils.thisJarPath() != null;
 
         next.set(e -> onNext());
     }
@@ -179,7 +179,7 @@ public final class ModpackInfoPage extends Control implements WizardPage {
                 if (skinnable.controller.getSettings().get(MODPACK_TYPE) == MODPACK_TYPE_SERVER) {
                     Hyperlink hyperlink = new Hyperlink(i18n("modpack.wizard.step.initialization.server"));
                     hyperlink.setOnMouseClicked(e -> {
-                        FXUtils.openLink("https://hmcl.huangyuhui.net/api/redirect/server-modpack");
+                        FXUtils.openLink("https://docs.hmcl.net/modpack/serverpack.html");
                     });
                     borderPane.setTop(hyperlink);
                 } else {
@@ -377,13 +377,10 @@ public final class ModpackInfoPage extends Control implements WizardPage {
                     hbox.setAlignment(Pos.CENTER_RIGHT);
                     borderPane.setBottom(hbox);
 
-                    JFXButton nextButton = new JFXButton();
+                    JFXButton nextButton = FXUtils.newRaisedButton(i18n("wizard.next"));
                     nextButton.onMouseClickedProperty().bind(skinnable.next);
                     nextButton.setPrefWidth(100);
                     nextButton.setPrefHeight(40);
-                    nextButton.setButtonType(JFXButton.ButtonType.RAISED);
-                    nextButton.setText(i18n("wizard.next"));
-                    nextButton.getStyleClass().add("jfx-button-raised");
                     nextButton.disableProperty().bind(
                             // Disable nextButton if any text of JFXTextFields in validatingFields does not fulfill
                             // our requirement.

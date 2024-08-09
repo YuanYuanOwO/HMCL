@@ -34,18 +34,28 @@ import org.jackhuang.hmcl.download.forge.ForgeNewInstallTask;
 import org.jackhuang.hmcl.download.forge.ForgeOldInstallTask;
 import org.jackhuang.hmcl.download.game.GameAssetDownloadTask;
 import org.jackhuang.hmcl.download.game.GameInstallTask;
+import org.jackhuang.hmcl.download.java.JavaDownloadTask;
 import org.jackhuang.hmcl.download.liteloader.LiteLoaderInstallTask;
+import org.jackhuang.hmcl.download.neoforge.NeoForgeInstallTask;
+import org.jackhuang.hmcl.download.neoforge.NeoForgeOldInstallTask;
 import org.jackhuang.hmcl.download.optifine.OptiFineInstallTask;
+import org.jackhuang.hmcl.download.quilt.QuiltAPIInstallTask;
+import org.jackhuang.hmcl.download.quilt.QuiltInstallTask;
 import org.jackhuang.hmcl.game.HMCLModpackInstallTask;
 import org.jackhuang.hmcl.mod.MinecraftInstanceTask;
 import org.jackhuang.hmcl.mod.ModpackInstallTask;
 import org.jackhuang.hmcl.mod.ModpackUpdateTask;
 import org.jackhuang.hmcl.mod.curse.CurseCompletionTask;
 import org.jackhuang.hmcl.mod.curse.CurseInstallTask;
+import org.jackhuang.hmcl.mod.mcbbs.McbbsModpackCompletionTask;
 import org.jackhuang.hmcl.mod.mcbbs.McbbsModpackExportTask;
+import org.jackhuang.hmcl.mod.modrinth.ModrinthCompletionTask;
+import org.jackhuang.hmcl.mod.modrinth.ModrinthInstallTask;
 import org.jackhuang.hmcl.mod.multimc.MultiMCModpackExportTask;
 import org.jackhuang.hmcl.mod.multimc.MultiMCModpackInstallTask;
+import org.jackhuang.hmcl.mod.server.ServerModpackCompletionTask;
 import org.jackhuang.hmcl.mod.server.ServerModpackExportTask;
+import org.jackhuang.hmcl.mod.server.ServerModpackLocalInstallTask;
 import org.jackhuang.hmcl.setting.Theme;
 import org.jackhuang.hmcl.task.Task;
 import org.jackhuang.hmcl.task.TaskExecutor;
@@ -115,6 +125,8 @@ public final class TaskListPane extends StackPane {
                     task.setName(i18n("install.installer.install", i18n("install.installer.game")));
                 } else if (task instanceof ForgeNewInstallTask || task instanceof ForgeOldInstallTask) {
                     task.setName(i18n("install.installer.install", i18n("install.installer.forge")));
+                } else if (task instanceof NeoForgeInstallTask || task instanceof NeoForgeOldInstallTask) {
+                    task.setName(i18n("install.installer.install", i18n("install.installer.neoforge")));
                 } else if (task instanceof LiteLoaderInstallTask) {
                     task.setName(i18n("install.installer.install", i18n("install.installer.liteloader")));
                 } else if (task instanceof OptiFineInstallTask) {
@@ -123,8 +135,12 @@ public final class TaskListPane extends StackPane {
                     task.setName(i18n("install.installer.install", i18n("install.installer.fabric")));
                 } else if (task instanceof FabricAPIInstallTask) {
                     task.setName(i18n("install.installer.install", i18n("install.installer.fabric-api")));
-                } else if (task instanceof CurseCompletionTask) {
-                    task.setName(i18n("modpack.type.curse.completion"));
+                } else if (task instanceof QuiltInstallTask) {
+                    task.setName(i18n("install.installer.install", i18n("install.installer.quilt")));
+                } else if (task instanceof QuiltAPIInstallTask) {
+                    task.setName(i18n("install.installer.install", i18n("install.installer.quilt-api")));
+                } else if (task instanceof CurseCompletionTask || task instanceof ModrinthCompletionTask || task instanceof ServerModpackCompletionTask || task instanceof McbbsModpackCompletionTask) {
+                    task.setName(i18n("modpack.completion"));
                 } else if (task instanceof ModpackInstallTask) {
                     task.setName(i18n("modpack.installing"));
                 } else if (task instanceof ModpackUpdateTask) {
@@ -133,12 +149,18 @@ public final class TaskListPane extends StackPane {
                     task.setName(i18n("modpack.install", i18n("modpack.type.curse")));
                 } else if (task instanceof MultiMCModpackInstallTask) {
                     task.setName(i18n("modpack.install", i18n("modpack.type.multimc")));
+                } else if (task instanceof ModrinthInstallTask) {
+                    task.setName(i18n("modpack.install", i18n("modpack.type.modrinth")));
+                } else if (task instanceof ServerModpackLocalInstallTask) {
+                    task.setName(i18n("modpack.install", i18n("modpack.type.server")));
                 } else if (task instanceof HMCLModpackInstallTask) {
                     task.setName(i18n("modpack.install", i18n("modpack.type.hmcl")));
                 } else if (task instanceof McbbsModpackExportTask || task instanceof MultiMCModpackExportTask || task instanceof ServerModpackExportTask) {
                     task.setName(i18n("modpack.export"));
                 } else if (task instanceof MinecraftInstanceTask) {
                     task.setName(i18n("modpack.scan"));
+                } else if (task instanceof JavaDownloadTask) {
+                    task.setName(i18n("download.java"));
                 }
 
                 Platform.runLater(() -> {
@@ -186,7 +208,7 @@ public final class TaskListPane extends StackPane {
                 if (task instanceof Task.CountTask) {
                     runInFX(() -> {
                         stageNodes.stream()
-                                .filter(x -> x.stage.equals(((Task.CountTask) task).getCountStage()))
+                                .filter(x -> x.stage.equals(((Task<?>.CountTask) task).getCountStage()))
                                 .findAny()
                                 .ifPresent(StageNode::count);
                     });
@@ -230,10 +252,12 @@ public final class TaskListPane extends StackPane {
                 case "hmcl.install.assets": message = i18n("assets.download"); break;
                 case "hmcl.install.game": message = i18n("install.installer.install", i18n("install.installer.game") + " " + stageValue); break;
                 case "hmcl.install.forge": message = i18n("install.installer.install", i18n("install.installer.forge") + " " + stageValue); break;
+                case "hmcl.install.neoforge": message = i18n("install.installer.install", i18n("install.installer.neoforge") + " " + stageValue); break;
                 case "hmcl.install.liteloader": message = i18n("install.installer.install", i18n("install.installer.liteloader") + " " + stageValue); break;
                 case "hmcl.install.optifine": message = i18n("install.installer.install", i18n("install.installer.optifine") + " " + stageValue); break;
                 case "hmcl.install.fabric": message = i18n("install.installer.install", i18n("install.installer.fabric") + " " + stageValue); break;
                 case "hmcl.install.fabric-api": message = i18n("install.installer.install", i18n("install.installer.fabric-api") + " " + stageValue); break;
+                case "hmcl.install.quilt": message = i18n("install.installer.install", i18n("install.installer.quilt") + " " + stageValue); break;
                 default: message = i18n(stageKey); break;
             }
             // @formatter:on
@@ -243,21 +267,21 @@ public final class TaskListPane extends StackPane {
             BorderPane.setMargin(title, new Insets(0, 0, 0, 8));
             setPadding(new Insets(0, 0, 8, 4));
             setCenter(title);
-            setLeft(FXUtils.limitingSize(SVG.dotsHorizontal(Theme.blackFillBinding(), 14, 14), 14, 14));
+            setLeft(FXUtils.limitingSize(SVG.DOTS_HORIZONTAL.createIcon(Theme.blackFill(), 14, 14), 14, 14));
         }
 
         public void begin() {
             if (started) return;
             started = true;
-            setLeft(FXUtils.limitingSize(SVG.arrowRight(Theme.blackFillBinding(), 14, 14), 14, 14));
+            setLeft(FXUtils.limitingSize(SVG.ARROW_RIGHT.createIcon(Theme.blackFill(), 14, 14), 14, 14));
         }
 
         public void fail() {
-            setLeft(FXUtils.limitingSize(SVG.close(Theme.blackFillBinding(), 14, 14), 14, 14));
+            setLeft(FXUtils.limitingSize(SVG.CLOSE.createIcon(Theme.blackFill(), 14, 14), 14, 14));
         }
 
         public void succeed() {
-            setLeft(FXUtils.limitingSize(SVG.check(Theme.blackFillBinding(), 14, 14), 14, 14));
+            setLeft(FXUtils.limitingSize(SVG.CHECK.createIcon(Theme.blackFill(), 14, 14), 14, 14));
         }
 
         public void count() {
@@ -282,7 +306,7 @@ public final class TaskListPane extends StackPane {
         private final Label title = new Label();
         private final Label state = new Label();
         private final DoubleBinding binding = Bindings.createDoubleBinding(() ->
-                        getWidth() - getPadding().getLeft() - getPadding().getRight(),
+                        getWidth() - getPadding().getLeft() - getPadding().getRight() - getInsets().getLeft() - getInsets().getRight(),
                 paddingProperty(), widthProperty());
 
         public ProgressListNode(Task<?> task) {

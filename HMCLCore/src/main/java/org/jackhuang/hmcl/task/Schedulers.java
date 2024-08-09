@@ -18,12 +18,11 @@
 package org.jackhuang.hmcl.task;
 
 import javafx.application.Platform;
-import org.jackhuang.hmcl.util.Logging;
 
-import javax.swing.*;
 import java.util.concurrent.*;
 
 import static org.jackhuang.hmcl.util.Lang.threadPool;
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 
 /**
  *
@@ -61,16 +60,12 @@ public final class Schedulers {
         return Platform::runLater;
     }
 
-    public static Executor swing() {
-        return SwingUtilities::invokeLater;
-    }
-
     public static Executor defaultScheduler() {
         return ForkJoinPool.commonPool();
     }
 
     public static synchronized void shutdown() {
-        Logging.LOG.info("Shutting down executor services.");
+        LOG.info("Shutting down executor services.");
 
         // shutdownNow will interrupt all threads.
         // So when we want to close the app, no threads need to be waited for finish.

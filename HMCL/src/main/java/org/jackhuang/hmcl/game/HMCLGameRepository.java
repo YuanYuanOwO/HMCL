@@ -20,16 +20,15 @@ package org.jackhuang.hmcl.game;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParseException;
-import com.google.gson.reflect.TypeToken;
 import javafx.scene.image.Image;
 import org.jackhuang.hmcl.Metadata;
 import org.jackhuang.hmcl.download.LibraryAnalyzer;
 import org.jackhuang.hmcl.event.Event;
 import org.jackhuang.hmcl.event.EventManager;
+import org.jackhuang.hmcl.mod.ModAdviser;
 import org.jackhuang.hmcl.mod.Modpack;
 import org.jackhuang.hmcl.mod.ModpackConfiguration;
-import org.jackhuang.hmcl.mod.mcbbs.McbbsModpackLocalInstallTask;
-import org.jackhuang.hmcl.mod.mcbbs.McbbsModpackManifest;
+import org.jackhuang.hmcl.mod.ModpackProvider;
 import org.jackhuang.hmcl.setting.Profile;
 import org.jackhuang.hmcl.setting.ProxyManager;
 import org.jackhuang.hmcl.setting.VersionIconType;
@@ -44,16 +43,19 @@ import org.jackhuang.hmcl.util.versioning.VersionNumber;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.*;
-import java.util.logging.Level;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.jackhuang.hmcl.setting.ConfigHolder.config;
-import static org.jackhuang.hmcl.ui.FXUtils.newImage;
-import static org.jackhuang.hmcl.util.Logging.LOG;
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
+import static org.jackhuang.hmcl.util.Pair.pair;
 
 public class HMCLGameRepository extends DefaultGameRepository {
     private final Profile profile;
@@ -101,7 +103,7 @@ public class HMCLGameRepository extends DefaultGameRepository {
     public Stream<Version> getDisplayVersions() {
         return getVersions().stream()
                 .filter(v -> !v.isHidden())
-                .sorted(Comparator.comparing((Version v) -> v.getReleaseTime() == null ? new Date(0L) : v.getReleaseTime())
+                .sorted(Comparator.comparing((Version v) -> Lang.requireNonNullElse(v.getReleaseTime(), Instant.EPOCH))
                         .thenComparing(v -> VersionNumber.asVersion(v.getId())));
     }
 
@@ -121,10 +123,10 @@ public class HMCLGameRepository extends DefaultGameRepository {
             if (!file.exists() && !versions.isEmpty())
                 FileUtils.writeText(file, PROFILE);
         } catch (IOException ex) {
-            LOG.log(Level.WARNING, "Unable to create launcher_profiles.json, Forge/LiteLoader installer will not work.", ex);
+            LOG.warning("Unable to create launcher_profiles.json, Forge/LiteLoader installer will not work.", ex);
         }
 
-        // https://github.com/huanghongxun/HMCL/issues/938
+        // https://github.com/HMCL-dev/HMCL/issues/938
         System.gc();
     }
 
@@ -163,7 +165,7 @@ public class HMCLGameRepository extends DefaultGameRepository {
         Files.move(fromJson, toJson);
 
         FileUtils.writeText(toJson.toFile(), JsonUtils.GSON.toJson(fromVersion.setId(dstId)));
-        
+
         VersionSetting oldVersionSetting = getVersionSetting(srcId).clone();
         GameDirectoryType originalGameDirType = oldVersionSetting.getGameDirType();
         oldVersionSetting.setUsesGlobal(false);
@@ -174,17 +176,7 @@ public class HMCLGameRepository extends DefaultGameRepository {
         File srcGameDir = getRunDirectory(srcId);
         File dstGameDir = getRunDirectory(dstId);
 
-        List<String> blackList = new ArrayList<>(Arrays.asList(
-                "regex:(.*?)\\.log",
-                "usernamecache.json", "usercache.json", // Minecraft
-                "launcher_profiles.json", "launcher.pack.lzma", // Minecraft Launcher
-                "backup", "pack.json", "launcher.jar", "cache", // HMCL
-                ".curseclient", // Curse
-                ".fabric", ".mixin.out", // Fabric
-                "jars", "logs", "versions", "assets", "libraries", "crash-reports", "NVIDIA", "AMD", "screenshots", "natives", "native", "$native", "server-resource-packs", // Minecraft
-                "downloads", // Curse
-                "asm", "backups", "TCNodeTracker", "CustomDISkins", "data", "CustomSkinLoader/caches" // Mods
-        ));
+        List<String> blackList = new ArrayList<>(ModAdviser.MODPACK_BLACK_LIST);
         blackList.add(srcId + ".jar");
         blackList.add(srcId + ".json");
         if (!copySaves)
@@ -266,28 +258,91 @@ public class HMCLGameRepository extends DefaultGameRepository {
             return vs;
     }
 
-    public File getVersionIconFile(String id) {
-        return new File(getVersionRoot(id), "icon.png");
+    public Optional<File> getVersionIconFile(String id) {
+        File root = getVersionRoot(id);
+
+        File iconFile = new File(root, "icon.png");
+        if (iconFile.exists()) {
+            return Optional.of(iconFile);
+        }
+
+        iconFile = new File(root, "icon.jpg");
+        if (iconFile.exists()) {
+            return Optional.of(iconFile);
+        }
+
+        iconFile = new File(root, "icon.bmp");
+        if (iconFile.exists()) {
+            return Optional.of(iconFile);
+        }
+
+        iconFile = new File(root, "icon.gif");
+        if (iconFile.exists()) {
+            return Optional.of(iconFile);
+        }
+
+        return Optional.empty();
+    }
+
+    public void setVersionIconFile(String id, File iconFile) throws IOException {
+        String ext = FileUtils.getExtension(iconFile).toLowerCase(Locale.ROOT);
+        if (!ext.equals("png") && !ext.equals("jpg") && !ext.equals("bmp") && !ext.equals("gif")) {
+            throw new IllegalArgumentException("Unsupported icon file: " + ext);
+        }
+
+        deleteIconFile(id);
+
+        FileUtils.copyFile(iconFile, new File(getVersionRoot(id), "icon." + ext));
+    }
+
+    public void deleteIconFile(String id) {
+        File root = getVersionRoot(id);
+
+        new File(root, "icon.png").delete();
+        new File(root, "icon.jpg").delete();
+        new File(root, "icon.bmp").delete();
+        new File(root, "icon.gif").delete();
     }
 
     public Image getVersionIconImage(String id) {
         if (id == null || !isLoaded())
-            return newImage("/assets/img/grass.png");
+            return VersionIconType.DEFAULT.getIcon();
 
         VersionSetting vs = getLocalVersionSettingOrCreate(id);
-        VersionIconType iconType = Optional.ofNullable(vs).map(VersionSetting::getVersionIcon).orElse(VersionIconType.DEFAULT);
+        VersionIconType iconType = vs != null ? Lang.requireNonNullElse(vs.getVersionIcon(), VersionIconType.DEFAULT) : VersionIconType.DEFAULT;
 
         if (iconType == VersionIconType.DEFAULT) {
             Version version = getVersion(id).resolve(this);
-            File iconFile = getVersionIconFile(id);
-            if (iconFile.exists())
-                return new Image("file:" + iconFile.getAbsolutePath());
-            else if (LibraryAnalyzer.isModded(this, version))
-                return newImage("/assets/img/furnace.png");
-            else
-                return newImage("/assets/img/grass.png");
+            Optional<File> iconFile = getVersionIconFile(id);
+            if (iconFile.isPresent()) {
+                try (InputStream inputStream = new FileInputStream(iconFile.get())) {
+                    return new Image(inputStream);
+                } catch (IOException e) {
+                    LOG.warning("Failed to load version icon of " + id, e);
+                }
+            }
+
+            if (LibraryAnalyzer.isModded(this, version)) {
+                LibraryAnalyzer libraryAnalyzer = LibraryAnalyzer.analyze(version, null);
+                if (libraryAnalyzer.has(LibraryAnalyzer.LibraryType.FABRIC))
+                    return VersionIconType.FABRIC.getIcon();
+                else if (libraryAnalyzer.has(LibraryAnalyzer.LibraryType.FORGE))
+                    return VersionIconType.FORGE.getIcon();
+                else if (libraryAnalyzer.has(LibraryAnalyzer.LibraryType.NEO_FORGE))
+                    return VersionIconType.NEO_FORGE.getIcon();
+                else if (libraryAnalyzer.has(LibraryAnalyzer.LibraryType.QUILT))
+                    return VersionIconType.QUILT.getIcon();
+                else if (libraryAnalyzer.has(LibraryAnalyzer.LibraryType.OPTIFINE))
+                    return VersionIconType.OPTIFINE.getIcon();
+                else if (libraryAnalyzer.has(LibraryAnalyzer.LibraryType.LITELOADER))
+                    return VersionIconType.CHICKEN.getIcon();
+                else
+                    return VersionIconType.FURNACE.getIcon();
+            }
+
+            return VersionIconType.DEFAULT.getIcon();
         } else {
-            return newImage(iconType.getResourceUrl());
+            return iconType.getIcon();
         }
     }
 
@@ -302,7 +357,7 @@ public class HMCLGameRepository extends DefaultGameRepository {
             FileUtils.writeText(file, GSON.toJson(localVersionSettings.get(id)));
             return true;
         } catch (IOException e) {
-            LOG.log(Level.SEVERE, "Unable to save version setting of " + id, e);
+            LOG.error("Unable to save version setting of " + id, e);
             return false;
         }
     }
@@ -338,14 +393,24 @@ public class HMCLGameRepository extends DefaultGameRepository {
                 .setVersionName(version)
                 .setProfileName(Metadata.TITLE)
                 .setGameArguments(StringUtils.tokenize(vs.getMinecraftArgs()))
-                .setJavaArguments(StringUtils.tokenize(vs.getJavaArgs()))
-                .setMaxMemory((int)(getAllocatedMemory(
+                .setOverrideJavaArguments(StringUtils.tokenize(vs.getJavaArgs()))
+                .setMaxMemory(vs.isNoJVMArgs() && vs.isAutoMemory() ? null : (int)(getAllocatedMemory(
                         vs.getMaxMemory() * 1024L * 1024L,
                         OperatingSystem.getPhysicalMemoryStatus().orElse(OperatingSystem.PhysicalMemoryStatus.INVALID).getAvailable(),
                         vs.isAutoMemory()
                 ) / 1024 / 1024))
                 .setMinMemory(vs.getMinMemory())
                 .setMetaspace(Lang.toIntOrNull(vs.getPermSize()))
+                .setEnvironmentVariables(
+                        Lang.mapOf(StringUtils.tokenize(vs.getEnvironmentVariables())
+                                .stream()
+                                .map(it -> {
+                                    int idx = it.indexOf('=');
+                                    return idx >= 0 ? pair(it.substring(0, idx), it.substring(idx + 1)) : pair(it, "");
+                                })
+                                .collect(Collectors.toList())
+                        )
+                )
                 .setWidth(vs.getWidth())
                 .setHeight(vs.getHeight())
                 .setFullscreen(vs.isFullscreen())
@@ -357,6 +422,7 @@ public class HMCLGameRepository extends DefaultGameRepository {
                 .setNativesDirType(vs.getNativesDirType())
                 .setNativesDir(vs.getNativesDir())
                 .setProcessPriority(vs.getProcessPriority())
+                .setRenderer(vs.getRenderer())
                 .setUseNativeGLFW(vs.isUseNativeGLFW())
                 .setUseNativeOpenAL(vs.isUseNativeOpenAL())
                 .setDaemon(!makeLaunchScript && vs.getLauncherVisibility().isDaemon())
@@ -374,15 +440,15 @@ public class HMCLGameRepository extends DefaultGameRepository {
             try {
                 String jsonText = FileUtils.readText(json);
                 ModpackConfiguration<?> modpackConfiguration = JsonUtils.GSON.fromJson(jsonText, ModpackConfiguration.class);
-                if (McbbsModpackLocalInstallTask.MODPACK_TYPE.equals(modpackConfiguration.getType())) {
-                    ModpackConfiguration<McbbsModpackManifest> config = JsonUtils.GSON.fromJson(FileUtils.readText(json), new TypeToken<ModpackConfiguration<McbbsModpackManifest>>() {
-                    }.getType());
-                    config.getManifest().injectLaunchOptions(builder);
-                }
+                ModpackProvider provider = ModpackHelper.getProviderByType(modpackConfiguration.getType());
+                if (provider != null) provider.injectLaunchOptions(jsonText, builder);
             } catch (IOException | JsonParseException e) {
                 e.printStackTrace();
             }
         }
+
+        if (vs.isAutoMemory() && builder.getJavaArguments().stream().anyMatch(it -> it.startsWith("-Xmx")))
+            builder.setMaxMemory(null);
 
         return builder.create();
     }
@@ -430,7 +496,7 @@ public class HMCLGameRepository extends DefaultGameRepository {
             return false;
 
         if (OperatingSystem.CURRENT_OS == OperatingSystem.WINDOWS &&
-                FORBIDDEN_VERSION_IDS.contains(id.toLowerCase()))
+                FORBIDDEN_VERSION_IDS.contains(id.toLowerCase(Locale.ROOT)))
             return false;
 
         return OperatingSystem.isNameValid(id);
@@ -455,7 +521,7 @@ public class HMCLGameRepository extends DefaultGameRepository {
 
     public static long getAllocatedMemory(long minimum, long available, boolean auto) {
         if (auto) {
-            available -= 256 * 1024 * 1024; // Reserve 256MB memory for off-heap memory and HMCL itself
+            available -= 384 * 1024 * 1024; // Reserve 384MiB memory for off-heap memory and HMCL itself
             if (available <= 0) {
                 return minimum;
             }
@@ -464,7 +530,7 @@ public class HMCLGameRepository extends DefaultGameRepository {
             final long suggested = Math.min(available <= threshold
                             ? (long) (available * 0.8)
                             : (long) (threshold * 0.8 + (available - threshold) * 0.2),
-                    32736L * 1024 * 1024); // Limit the maximum suggested memory to ensure that compressed oops are available
+                    16384L * 1024 * 1024);
             return Math.max(minimum, suggested);
         } else {
             return minimum;

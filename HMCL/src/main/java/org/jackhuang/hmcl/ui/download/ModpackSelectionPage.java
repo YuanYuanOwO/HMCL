@@ -20,19 +20,26 @@ package org.jackhuang.hmcl.ui.download;
 import com.jfoenix.controls.JFXButton;
 import com.jfoenix.effects.JFXDepthManager;
 import javafx.application.Platform;
-import javafx.fxml.FXML;
-import javafx.scene.layout.StackPane;
+import javafx.geometry.Insets;
+import javafx.geometry.Pos;
+import javafx.scene.control.Label;
+import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.VBox;
+import javafx.scene.shape.SVGPath;
 import javafx.stage.FileChooser;
+import org.jackhuang.hmcl.game.ModpackHelper;
 import org.jackhuang.hmcl.mod.server.ServerModpackManifest;
 import org.jackhuang.hmcl.task.FileDownloadTask;
 import org.jackhuang.hmcl.task.GetTask;
 import org.jackhuang.hmcl.task.Schedulers;
 import org.jackhuang.hmcl.ui.Controllers;
 import org.jackhuang.hmcl.ui.FXUtils;
+import org.jackhuang.hmcl.ui.SVG;
+import org.jackhuang.hmcl.ui.construct.TwoLineListItem;
 import org.jackhuang.hmcl.ui.wizard.WizardController;
 import org.jackhuang.hmcl.ui.wizard.WizardPage;
+import org.jackhuang.hmcl.util.TaskCancellationAction;
 import org.jackhuang.hmcl.util.gson.JsonUtils;
-import org.jackhuang.hmcl.util.io.FileUtils;
 
 import java.io.File;
 import java.io.IOException;
@@ -47,18 +54,24 @@ import static org.jackhuang.hmcl.ui.download.RemoteModpackPage.MODPACK_SERVER_MA
 import static org.jackhuang.hmcl.util.Lang.tryCast;
 import static org.jackhuang.hmcl.util.i18n.I18n.i18n;
 
-public final class ModpackSelectionPage extends StackPane implements WizardPage {
+public final class ModpackSelectionPage extends VBox implements WizardPage {
     private final WizardController controller;
-
-    @FXML private JFXButton btnLocal;
-    @FXML private JFXButton btnRemote;
 
     public ModpackSelectionPage(WizardController controller) {
         this.controller = controller;
-        FXUtils.loadFXML(this, "/assets/fxml/download/modpack-source.fxml");
 
-        JFXDepthManager.setDepth(btnLocal, 1);
-        JFXDepthManager.setDepth(btnRemote, 1);
+        Label title = new Label(i18n("install.modpack"));
+        title.setPadding(new Insets(8));
+
+        this.getStyleClass().add("jfx-list-view");
+        this.setMaxSize(400, 150);
+        this.setSpacing(8);
+        this.getChildren().setAll(
+                title,
+                createButton("local", this::onChooseLocalFile),
+                createButton("remote", this::onChooseRemoteFile),
+                createButton("repository", this::onChooseRepository)
+        );
 
         Optional<File> filePath = tryCast(controller.getSettings().get(MODPACK_FILE), File.class);
         if (filePath.isPresent()) {
@@ -66,18 +79,41 @@ public final class ModpackSelectionPage extends StackPane implements WizardPage 
             Platform.runLater(controller::onNext);
         }
 
-        FXUtils.applyDragListener(this, it -> "zip".equals(FileUtils.getExtension(it)), modpacks -> {
+        FXUtils.applyDragListener(this, ModpackHelper::isFileModpackByExtension, modpacks -> {
             File modpack = modpacks.get(0);
             controller.getSettings().put(MODPACK_FILE, modpack);
             controller.onNext();
         });
     }
 
-    @FXML
+    private JFXButton createButton(String type, Runnable action) {
+        JFXButton button = new JFXButton();
+
+        button.getStyleClass().add("card");
+        button.setStyle("-fx-cursor: HAND;");
+        button.prefWidthProperty().bind(this.widthProperty());
+        button.setOnAction(e -> action.run());
+
+        BorderPane graphic = new BorderPane();
+        graphic.setMouseTransparent(true);
+        graphic.setLeft(new TwoLineListItem(i18n("modpack.choose." + type), i18n("modpack.choose." + type + ".detail")));
+
+        SVGPath arrow = new SVGPath();
+        arrow.setContent(SVG.ARROW_RIGHT.getPath());
+        BorderPane.setAlignment(arrow, Pos.CENTER);
+        graphic.setRight(arrow);
+
+        button.setGraphic(graphic);
+
+        JFXDepthManager.setDepth(button, 1);
+
+        return button;
+    }
+
     private void onChooseLocalFile() {
         FileChooser chooser = new FileChooser();
         chooser.setTitle(i18n("modpack.choose"));
-        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(i18n("modpack"), "*.zip"));
+        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(i18n("modpack"), "*.zip", "*.mrpack"));
         File selectedFile = chooser.showOpenDialog(Controllers.getStage());
         if (selectedFile == null) {
             Platform.runLater(controller::onEnd);
@@ -88,7 +124,6 @@ public final class ModpackSelectionPage extends StackPane implements WizardPage 
         controller.onNext();
     }
 
-    @FXML
     private void onChooseRemoteFile() {
         Controllers.prompt(i18n("modpack.choose.remote.tooltip"), (urlString, resolve, reject) -> {
             try {
@@ -106,7 +141,7 @@ public final class ModpackSelectionPage extends StackPane implements WizardPage 
                         } else {
                             reject.accept(e.getMessage());
                         }
-                    }).executor(true), i18n("message.downloading"));
+                    }).executor(true), i18n("message.downloading"), TaskCancellationAction.NORMAL);
                 } else {
                     // otherwise we still consider the file as modpack zip file
                     // since casually the url may not ends with ".zip"
@@ -124,13 +159,20 @@ public final class ModpackSelectionPage extends StackPane implements WizardPage 
                                             reject.accept(e.getMessage());
                                         }
                                     }).executor(true),
-                            i18n("message.downloading")
+                            i18n("message.downloading"),
+                            TaskCancellationAction.NORMAL
                     );
                 }
             } catch (IOException e) {
                 reject.accept(e.getMessage());
             }
         });
+    }
+
+    public void onChooseRepository() {
+        DownloadPage downloadPage = new DownloadPage();
+        downloadPage.showModpackDownloads();
+        Controllers.navigate(downloadPage);
     }
 
     @Override

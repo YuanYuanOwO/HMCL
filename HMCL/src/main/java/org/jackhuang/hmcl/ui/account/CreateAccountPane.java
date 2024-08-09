@@ -30,20 +30,20 @@ import javafx.geometry.HPos;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
+import javafx.scene.canvas.Canvas;
 import javafx.scene.control.Hyperlink;
 import javafx.scene.control.Label;
 import javafx.scene.control.TextInputControl;
-import javafx.scene.image.ImageView;
 import javafx.scene.layout.*;
 import org.jackhuang.hmcl.auth.AccountFactory;
 import org.jackhuang.hmcl.auth.CharacterSelector;
 import org.jackhuang.hmcl.auth.NoSelectedCharacterException;
 import org.jackhuang.hmcl.auth.authlibinjector.AuthlibInjectorAccountFactory;
 import org.jackhuang.hmcl.auth.authlibinjector.AuthlibInjectorServer;
+import org.jackhuang.hmcl.auth.authlibinjector.BoundAuthlibInjectorAccountFactory;
 import org.jackhuang.hmcl.auth.microsoft.MicrosoftAccountFactory;
 import org.jackhuang.hmcl.auth.offline.OfflineAccountFactory;
 import org.jackhuang.hmcl.auth.yggdrasil.GameProfile;
-import org.jackhuang.hmcl.auth.yggdrasil.YggdrasilAccountFactory;
 import org.jackhuang.hmcl.auth.yggdrasil.YggdrasilService;
 import org.jackhuang.hmcl.game.OAuthServer;
 import org.jackhuang.hmcl.game.TexturesLoader;
@@ -57,6 +57,7 @@ import org.jackhuang.hmcl.ui.FXUtils;
 import org.jackhuang.hmcl.ui.SVG;
 import org.jackhuang.hmcl.ui.WeakListenerHolder;
 import org.jackhuang.hmcl.ui.construct.*;
+import org.jackhuang.hmcl.upgrade.IntegrityChecker;
 import org.jackhuang.hmcl.util.StringUtils;
 import org.jackhuang.hmcl.util.gson.UUIDTypeAdapter;
 import org.jackhuang.hmcl.util.javafx.BindingMapping;
@@ -67,6 +68,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.regex.Pattern;
 
 import static java.util.Collections.emptyList;
 import static java.util.Collections.unmodifiableList;
@@ -78,6 +80,7 @@ import static org.jackhuang.hmcl.util.i18n.I18n.i18n;
 import static org.jackhuang.hmcl.util.javafx.ExtendedProperties.classPropertyFor;
 
 public class CreateAccountPane extends JFXDialogLayout implements DialogAware {
+    private static final Pattern USERNAME_CHECKER_PATTERN = Pattern.compile("^[A-Za-z0-9_]+$");
 
     private boolean showMethodSwitcher;
     private AccountFactory<?> factory;
@@ -194,9 +197,8 @@ public class CreateAccountPane extends JFXDialogLayout implements DialogAware {
         setPrefWidth(560);
     }
 
-    public CreateAccountPane(AuthlibInjectorServer authserver) {
-        this(Accounts.FACTORY_AUTHLIB_INJECTOR);
-        ((AccountDetailsInputPane) detailsPane).selectAuthServer(authserver);
+    public CreateAccountPane(AuthlibInjectorServer authServer) {
+        this(Accounts.getAccountFactoryByAuthlibInjectorServer(authServer));
     }
 
     private void onAccept() {
@@ -221,35 +223,52 @@ public class CreateAccountPane extends JFXDialogLayout implements DialogAware {
             additionalData = null;
         }
 
-        logging.set(true);
-        deviceCode.set(null);
+        Runnable doCreate = () -> {
+            logging.set(true);
+            deviceCode.set(null);
 
-        loginTask = Task.supplyAsync(() -> factory.create(new DialogCharacterSelector(), username, password, null, additionalData))
-                .whenComplete(Schedulers.javafx(), account -> {
-                    int oldIndex = Accounts.getAccounts().indexOf(account);
-                    if (oldIndex == -1) {
-                        Accounts.getAccounts().add(account);
-                    } else {
-                        // adding an already-added account
-                        // instead of discarding the new account, we first remove the existing one then add the new one
-                        Accounts.getAccounts().remove(oldIndex);
-                        Accounts.getAccounts().add(oldIndex, account);
-                    }
+            loginTask = Task.supplyAsync(() -> factory.create(new DialogCharacterSelector(), username, password, null, additionalData))
+                    .whenComplete(Schedulers.javafx(), account -> {
+                        int oldIndex = Accounts.getAccounts().indexOf(account);
+                        if (oldIndex == -1) {
+                            Accounts.getAccounts().add(account);
+                        } else {
+                            // adding an already-added account
+                            // instead of discarding the new account, we first remove the existing one then add the new one
+                            Accounts.getAccounts().remove(oldIndex);
+                            Accounts.getAccounts().add(oldIndex, account);
+                        }
 
-                    // select the new account
-                    Accounts.setSelectedAccount(account);
+                        // select the new account
+                        Accounts.setSelectedAccount(account);
 
-                    spinner.hideSpinner();
-                    fireEvent(new DialogCloseEvent());
-                }, exception -> {
-                    if (exception instanceof NoSelectedCharacterException) {
+                        spinner.hideSpinner();
                         fireEvent(new DialogCloseEvent());
-                    } else {
-                        lblErrorMessage.setText(Accounts.localizeErrorMessage(exception));
+                    }, exception -> {
+                        if (exception instanceof NoSelectedCharacterException) {
+                            fireEvent(new DialogCloseEvent());
+                        } else {
+                            lblErrorMessage.setText(Accounts.localizeErrorMessage(exception));
+                        }
+                        body.setDisable(false);
+                        spinner.hideSpinner();
+                    }).executor(true);
+        };
+
+        if (factory instanceof OfflineAccountFactory && username != null && !USERNAME_CHECKER_PATTERN.matcher(username).matches()) {
+            Controllers.confirm(
+                    i18n("account.methods.offline.name.invalid"), i18n("message.warning"),
+                    MessageDialogPane.MessageType.WARNING,
+                    doCreate,
+                    () -> {
+                        lblErrorMessage.setText(i18n("account.methods.offline.name.invalid"));
+                        body.setDisable(false);
+                        spinner.hideSpinner();
                     }
-                    body.setDisable(false);
-                    spinner.hideSpinner();
-                }).executor(true);
+            );
+        } else {
+            doCreate.run();
+        }
     }
 
     private void onCancel() {
@@ -267,39 +286,63 @@ public class CreateAccountPane extends JFXDialogLayout implements DialogAware {
         }
         if (factory == Accounts.FACTORY_MICROSOFT) {
             VBox vbox = new VBox(8);
-            HintPane hintPane = new HintPane(MessageDialogPane.MessageType.INFO);
-            FXUtils.onChangeAndOperate(deviceCode, deviceCode -> {
-                if (deviceCode != null) {
-                    FXUtils.copyText(deviceCode.getUserCode());
-                    hintPane.setSegment(i18n("account.methods.microsoft.manual", deviceCode.getUserCode(), deviceCode.getVerificationUri()));
-                } else {
-                    hintPane.setSegment(i18n("account.methods.microsoft.hint"));
+            if (!Accounts.OAUTH_CALLBACK.getClientId().isEmpty()) {
+                HintPane hintPane = new HintPane(MessageDialogPane.MessageType.INFO);
+                FXUtils.onChangeAndOperate(deviceCode, deviceCode -> {
+                    if (deviceCode != null) {
+                        FXUtils.copyText(deviceCode.getUserCode());
+                        hintPane.setSegment(i18n("account.methods.microsoft.manual", deviceCode.getUserCode(), deviceCode.getVerificationUri()));
+                    } else {
+                        hintPane.setSegment(i18n("account.methods.microsoft.hint"));
+                    }
+                });
+                hintPane.setOnMouseClicked(e -> {
+                    if (deviceCode.get() != null) {
+                        FXUtils.copyText(deviceCode.get().getUserCode());
+                    }
+                });
+
+                holder.add(Accounts.OAUTH_CALLBACK.onGrantDeviceCode.registerWeak(value -> {
+                    runInFX(() -> deviceCode.set(value));
+                }));
+                FlowPane box = new FlowPane();
+                box.setHgap(8);
+                JFXHyperlink birthLink = new JFXHyperlink(i18n("account.methods.microsoft.birth"));
+                birthLink.setExternalLink("https://support.microsoft.com/account-billing/837badbc-999e-54d2-2617-d19206b9540a");
+                JFXHyperlink profileLink = new JFXHyperlink(i18n("account.methods.microsoft.profile"));
+                profileLink.setExternalLink("https://account.live.com/editprof.aspx");
+                JFXHyperlink purchaseLink = new JFXHyperlink(i18n("account.methods.microsoft.purchase"));
+                purchaseLink.setExternalLink(YggdrasilService.PURCHASE_URL);
+                JFXHyperlink deauthorizeLink = new JFXHyperlink(i18n("account.methods.microsoft.deauthorize"));
+                deauthorizeLink.setExternalLink("https://account.live.com/consent/Edit?client_id=000000004C794E0A");
+                JFXHyperlink forgotpasswordLink = new JFXHyperlink(i18n("account.methods.forgot_password"));
+                forgotpasswordLink.setExternalLink("https://www.minecraft.net/password/forgot");
+                JFXHyperlink createProfileLink = new JFXHyperlink(i18n("account.methods.microsoft.makegameidsettings"));
+                createProfileLink.setExternalLink("https://www.minecraft.net/msaprofile/mygames/editprofile");
+                box.getChildren().setAll(profileLink, birthLink, purchaseLink, deauthorizeLink, forgotpasswordLink, createProfileLink);
+                GridPane.setColumnSpan(box, 2);
+
+                if (!IntegrityChecker.isOfficial()) {
+                    HintPane unofficialHint = new HintPane(MessageDialogPane.MessageType.WARNING);
+                    unofficialHint.setText(i18n("unofficial.hint"));
+                    vbox.getChildren().add(unofficialHint);
                 }
-            });
-            hintPane.setOnMouseClicked(e -> {
-                if (deviceCode.get() != null) {
-                    FXUtils.copyText(deviceCode.get().getUserCode());
-                }
-            });
 
-            holder.add(Accounts.OAUTH_CALLBACK.onGrantDeviceCode.registerWeak(value -> {
-                runInFX(() -> deviceCode.set(value));
-            }));
+                vbox.getChildren().addAll(hintPane, box);
 
-            HBox box = new HBox(8);
-            JFXHyperlink birthLink = new JFXHyperlink(i18n("account.methods.microsoft.birth"));
-            birthLink.setOnAction(e -> FXUtils.openLink("https://support.microsoft.com/zh-cn/account-billing/如何更改-microsoft-帐户上的出生日期-837badbc-999e-54d2-2617-d19206b9540a"));
-            JFXHyperlink profileLink = new JFXHyperlink(i18n("account.methods.microsoft.profile"));
-            profileLink.setOnAction(e -> FXUtils.openLink("https://account.live.com/editprof.aspx"));
-            JFXHyperlink purchaseLink = new JFXHyperlink(i18n("account.methods.yggdrasil.purchase"));
-            purchaseLink.setOnAction(e -> FXUtils.openLink(YggdrasilService.PURCHASE_URL));
-            box.getChildren().setAll(profileLink, birthLink, purchaseLink);
-            GridPane.setColumnSpan(box, 2);
+                btnAccept.setDisable(false);
+            } else {
+                HintPane hintPane = new HintPane(MessageDialogPane.MessageType.WARNING);
+                hintPane.setSegment(i18n("account.methods.microsoft.snapshot"));
 
-            vbox.getChildren().setAll(hintPane, box);
+                JFXHyperlink officialWebsite = new JFXHyperlink(i18n("account.methods.microsoft.snapshot.website"));
+                officialWebsite.setExternalLink("https://hmcl.huangyuhui.net");
+
+                vbox.getChildren().setAll(hintPane, officialWebsite);
+                btnAccept.setDisable(true);
+            }
 
             detailsPane = vbox;
-            btnAccept.setDisable(false);
         } else {
             detailsPane = new AccountDetailsInputPane(factory, btnAccept::fire);
             btnAccept.disableProperty().bind(((AccountDetailsInputPane) detailsPane).validProperty().not());
@@ -310,7 +353,7 @@ public class CreateAccountPane extends JFXDialogLayout implements DialogAware {
     private static class AccountDetailsInputPane extends GridPane {
 
         // ==== authlib-injector hyperlinks ====
-        private static final String[] ALLOWED_LINKS = { "register" };
+        private static final String[] ALLOWED_LINKS = {"homepage", "register"};
 
         private static List<Hyperlink> createHyperlinks(AuthlibInjectorServer server) {
             if (server == null) {
@@ -332,12 +375,13 @@ public class CreateAccountPane extends JFXDialogLayout implements DialogAware {
         }
         // =====
 
-        private AccountFactory<?> factory;
+        private final AccountFactory<?> factory;
+        private @Nullable AuthlibInjectorServer server;
         private @Nullable JFXComboBox<AuthlibInjectorServer> cboServers;
         private @Nullable JFXTextField txtUsername;
         private @Nullable JFXPasswordField txtPassword;
         private @Nullable JFXTextField txtUUID;
-        private BooleanBinding valid;
+        private final BooleanBinding valid;
 
         public AccountDetailsInputPane(AccountFactory<?> factory, Runnable onAction) {
             this.factory = factory;
@@ -355,7 +399,37 @@ public class CreateAccountPane extends JFXDialogLayout implements DialogAware {
 
             int rowIndex = 0;
 
-            if (factory instanceof AuthlibInjectorAccountFactory) {
+            if (!IntegrityChecker.isOfficial() && !(factory instanceof OfflineAccountFactory)) {
+                HintPane hintPane = new HintPane(MessageDialogPane.MessageType.WARNING);
+                hintPane.setSegment(i18n("unofficial.hint"));
+                GridPane.setColumnSpan(hintPane, 2);
+                add(hintPane, 0, rowIndex);
+
+                rowIndex++;
+            }
+
+            if (factory instanceof BoundAuthlibInjectorAccountFactory) {
+                this.server = ((BoundAuthlibInjectorAccountFactory) factory).getServer();
+
+                Label lblServers = new Label(i18n("account.injector.server"));
+                setHalignment(lblServers, HPos.LEFT);
+                add(lblServers, 0, rowIndex);
+
+                Label lblServerName = new Label(this.server.getName());
+                lblServerName.setMaxWidth(Double.MAX_VALUE);
+                HBox.setHgrow(lblServerName, Priority.ALWAYS);
+
+                HBox linksContainer = new HBox();
+                linksContainer.setAlignment(Pos.CENTER);
+                linksContainer.getChildren().setAll(createHyperlinks(this.server));
+                linksContainer.setMinWidth(USE_PREF_SIZE);
+
+                HBox boxServers = new HBox(lblServerName, linksContainer);
+                boxServers.setAlignment(Pos.CENTER_LEFT);
+                add(boxServers, 1, rowIndex);
+
+                rowIndex++;
+            } else if (factory instanceof AuthlibInjectorAccountFactory) {
                 Label lblServers = new Label(i18n("account.injector.server"));
                 setHalignment(lblServers, HPos.LEFT);
                 add(lblServers, 0, rowIndex);
@@ -378,11 +452,14 @@ public class CreateAccountPane extends JFXDialogLayout implements DialogAware {
 
                 HBox linksContainer = new HBox();
                 linksContainer.setAlignment(Pos.CENTER);
-                onChangeAndOperate(cboServers.valueProperty(), server -> linksContainer.getChildren().setAll(createHyperlinks(server)));
+                onChangeAndOperate(cboServers.valueProperty(), server -> {
+                    this.server = server;
+                    linksContainer.getChildren().setAll(createHyperlinks(server));
+                });
                 linksContainer.setMinWidth(USE_PREF_SIZE);
 
                 JFXButton btnAddServer = new JFXButton();
-                btnAddServer.setGraphic(SVG.plus(Theme.blackFillBinding(), 20, 20));
+                btnAddServer.setGraphic(SVG.PLUS.createIcon(Theme.blackFill(), 20, 20));
                 btnAddServer.getStyleClass().add("toggle-icon4");
                 btnAddServer.setOnAction(e -> {
                     Controllers.dialog(new AddAuthlibInjectorServerPane());
@@ -430,28 +507,12 @@ public class CreateAccountPane extends JFXDialogLayout implements DialogAware {
                 rowIndex++;
             }
 
-            if (factory instanceof YggdrasilAccountFactory) {
-                HBox box = new HBox();
-                GridPane.setColumnSpan(box, 2);
-
-                JFXHyperlink migrationLink = new JFXHyperlink(i18n("account.methods.yggdrasil.migration"));
-                migrationLink.setOnAction(e -> FXUtils.openLink(YggdrasilService.PROFILE_URL));
-
-                JFXHyperlink migrationHowLink = new JFXHyperlink(i18n("account.methods.yggdrasil.migration.how"));
-                migrationHowLink.setOnAction(e -> FXUtils.openLink(YggdrasilService.MIGRATION_FAQ_URL));
-
-                JFXHyperlink purchaseLink = new JFXHyperlink(i18n("account.methods.yggdrasil.purchase"));
-                purchaseLink.setOnAction(e -> FXUtils.openLink(YggdrasilService.PURCHASE_URL));
-
-                box.getChildren().setAll(migrationLink, migrationHowLink, purchaseLink);
-                add(box, 0, rowIndex);
-
-                rowIndex++;
-            }
-
             if (factory instanceof OfflineAccountFactory) {
-                JFXHyperlink purchaseLink = new JFXHyperlink(i18n("account.methods.yggdrasil.purchase"));
-                purchaseLink.setOnAction(e -> FXUtils.openLink(YggdrasilService.PURCHASE_URL));
+                txtUsername.setPromptText(i18n("account.methods.offline.name.special_characters"));
+                runInFX(() -> FXUtils.installFastTooltip(txtUsername, i18n("account.methods.offline.name.special_characters")));
+
+                JFXHyperlink purchaseLink = new JFXHyperlink(i18n("account.methods.microsoft.purchase"));
+                purchaseLink.setExternalLink(YggdrasilService.PURCHASE_URL);
                 HBox linkPane = new HBox(purchaseLink);
                 GridPane.setColumnSpan(linkPane, 2);
                 add(linkPane, 0, rowIndex);
@@ -521,13 +582,8 @@ public class CreateAccountPane extends JFXDialogLayout implements DialogAware {
         }
 
         private boolean requiresEmailAsUsername() {
-            if (factory instanceof YggdrasilAccountFactory) {
-                return true;
-            } else if ((factory instanceof AuthlibInjectorAccountFactory) && cboServers != null) {
-                AuthlibInjectorServer server = cboServers.getValue();
-                if (server != null && !server.isNonEmailLogin()) {
-                    return true;
-                }
+            if ((factory instanceof AuthlibInjectorAccountFactory) && this.server != null) {
+                return !server.isNonEmailLogin();
             }
             return false;
         }
@@ -544,7 +600,7 @@ public class CreateAccountPane extends JFXDialogLayout implements DialogAware {
         }
 
         public @Nullable AuthlibInjectorServer getAuthServer() {
-            return cboServers == null ? null : cboServers.getValue();
+            return this.server;
         }
 
         public @Nullable String getUsername() {
@@ -557,10 +613,6 @@ public class CreateAccountPane extends JFXDialogLayout implements DialogAware {
 
         public BooleanBinding validProperty() {
             return valid;
-        }
-
-        public void selectAuthServer(AuthlibInjectorServer authserver) {
-            cboServers.getSelectionModel().select(authserver);
         }
 
         public void focus() {
@@ -601,12 +653,10 @@ public class CreateAccountPane extends JFXDialogLayout implements DialogAware {
         public GameProfile select(YggdrasilService service, List<GameProfile> profiles) throws NoSelectedCharacterException {
             Platform.runLater(() -> {
                 for (GameProfile profile : profiles) {
-                    ImageView portraitView = new ImageView();
-                    portraitView.setSmooth(false);
-                    portraitView.imageProperty().bind(TexturesLoader.fxAvatarBinding(service, profile.getId(), 32));
-                    FXUtils.limitSize(portraitView, 32, 32);
+                    Canvas portraitCanvas = new Canvas(32, 32);
+                    TexturesLoader.bindAvatar(portraitCanvas, service, profile.getId());
 
-                    IconedItem accountItem = new IconedItem(portraitView, profile.getName());
+                    IconedItem accountItem = new IconedItem(portraitCanvas, profile.getName());
                     accountItem.setOnMouseClicked(e -> {
                         selectedProfile = profile;
                         latch.countDown();
@@ -671,5 +721,5 @@ public class CreateAccountPane extends JFXDialogLayout implements DialogAware {
         }
     }
 
-    private static final String MICROSOFT_ACCOUNT_EDIT_PROFILE_URL = "https://support.microsoft.com/zh-cn/account-billing/%E5%A6%82%E4%BD%95%E6%9B%B4%E6%94%B9-microsoft-%E5%B8%90%E6%88%B7%E4%B8%8A%E7%9A%84%E5%87%BA%E7%94%9F%E6%97%A5%E6%9C%9F-837badbc-999e-54d2-2617-d19206b9540a";
+    private static final String MICROSOFT_ACCOUNT_EDIT_PROFILE_URL = "https://support.microsoft.com/account-billing/837badbc-999e-54d2-2617-d19206b9540a";
 }

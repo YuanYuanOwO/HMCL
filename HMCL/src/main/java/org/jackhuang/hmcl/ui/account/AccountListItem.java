@@ -20,8 +20,6 @@ package org.jackhuang.hmcl.ui.account;
 import javafx.beans.binding.Bindings;
 import javafx.beans.binding.ObjectBinding;
 import javafx.beans.binding.StringBinding;
-import javafx.beans.property.ObjectProperty;
-import javafx.beans.property.SimpleObjectProperty;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.beans.property.StringProperty;
 import javafx.beans.value.ObservableBooleanValue;
@@ -34,33 +32,32 @@ import org.jackhuang.hmcl.auth.AuthenticationException;
 import org.jackhuang.hmcl.auth.CredentialExpiredException;
 import org.jackhuang.hmcl.auth.authlibinjector.AuthlibInjectorAccount;
 import org.jackhuang.hmcl.auth.authlibinjector.AuthlibInjectorServer;
+import org.jackhuang.hmcl.auth.microsoft.MicrosoftAccount;
 import org.jackhuang.hmcl.auth.offline.OfflineAccount;
 import org.jackhuang.hmcl.auth.yggdrasil.CompleteGameProfile;
 import org.jackhuang.hmcl.auth.yggdrasil.TextureType;
 import org.jackhuang.hmcl.auth.yggdrasil.YggdrasilAccount;
-import org.jackhuang.hmcl.game.TexturesLoader;
 import org.jackhuang.hmcl.setting.Accounts;
 import org.jackhuang.hmcl.task.Schedulers;
 import org.jackhuang.hmcl.task.Task;
 import org.jackhuang.hmcl.ui.Controllers;
 import org.jackhuang.hmcl.ui.DialogController;
+import org.jackhuang.hmcl.ui.FXUtils;
 import org.jackhuang.hmcl.ui.construct.MessageDialogPane.MessageType;
 import org.jackhuang.hmcl.util.skin.InvalidSkinException;
 import org.jackhuang.hmcl.util.skin.NormalizedSkin;
 import org.jetbrains.annotations.Nullable;
 
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
-import java.util.logging.Level;
 
 import static java.util.Collections.emptySet;
 import static javafx.beans.binding.Bindings.createBooleanBinding;
-import static org.jackhuang.hmcl.util.Logging.LOG;
+import static org.jackhuang.hmcl.util.logging.Logger.LOG;
 import static org.jackhuang.hmcl.util.i18n.I18n.i18n;
 
 public class AccountListItem extends RadioButton {
@@ -68,7 +65,6 @@ public class AccountListItem extends RadioButton {
     private final Account account;
     private final StringProperty title = new SimpleStringProperty();
     private final StringProperty subtitle = new SimpleStringProperty();
-    private final ObjectProperty<Image> image = new SimpleObjectProperty<>();
 
     public AccountListItem(Account account) {
         this.account = account;
@@ -76,13 +72,14 @@ public class AccountListItem extends RadioButton {
         setUserData(account);
 
         String loginTypeName = Accounts.getLocalizedLoginTypeName(Accounts.getAccountFactory(account));
+        String portableSuffix = account.isPortable() ? ", " + i18n("account.portable") : "";
         if (account instanceof AuthlibInjectorAccount) {
             AuthlibInjectorServer server = ((AuthlibInjectorAccount) account).getServer();
             subtitle.bind(Bindings.concat(
                     loginTypeName, ", ", i18n("account.injector.server"), ": ",
-                    Bindings.createStringBinding(server::getName, server)));
+                    Bindings.createStringBinding(server::getName, server), portableSuffix));
         } else {
-            subtitle.set(loginTypeName);
+            subtitle.set(loginTypeName + portableSuffix);
         }
 
         StringBinding characterName = Bindings.createStringBinding(account::getCharacter, account);
@@ -93,8 +90,6 @@ public class AccountListItem extends RadioButton {
                     account.getUsername().isEmpty() ? characterName :
                             Bindings.concat(account.getUsername(), " - ", characterName));
         }
-
-        image.bind(TexturesLoader.fxAvatarBinding(account, 32));
     }
 
     @Override
@@ -113,31 +108,27 @@ public class AccountListItem extends RadioButton {
                 } catch (CancellationException e1) {
                     // ignore cancellation
                 } catch (Exception e1) {
-                    LOG.log(Level.WARNING, "Failed to refresh " + account + " with password", e1);
+                    LOG.warning("Failed to refresh " + account + " with password", e1);
                     throw e1;
                 }
             } catch (AuthenticationException e) {
-                LOG.log(Level.WARNING, "Failed to refresh " + account + " with token", e);
+                LOG.warning("Failed to refresh " + account + " with token", e);
                 throw e;
             }
         });
     }
 
     public ObservableBooleanValue canUploadSkin() {
-        if (account instanceof YggdrasilAccount) {
-            if (account instanceof AuthlibInjectorAccount) {
-                AuthlibInjectorAccount aiAccount = (AuthlibInjectorAccount) account;
-                ObjectBinding<Optional<CompleteGameProfile>> profile = aiAccount.getYggdrasilService().getProfileRepository().binding(aiAccount.getUUID());
-                return createBooleanBinding(() -> {
-                    Set<TextureType> uploadableTextures = profile.get()
-                            .map(AuthlibInjectorAccount::getUploadableTextures)
-                            .orElse(emptySet());
-                    return uploadableTextures.contains(TextureType.SKIN);
-                }, profile);
-            } else {
-                return createBooleanBinding(() -> true);
-            }
-        } else if (account instanceof OfflineAccount) {
+        if (account instanceof AuthlibInjectorAccount) {
+            AuthlibInjectorAccount aiAccount = (AuthlibInjectorAccount) account;
+            ObjectBinding<Optional<CompleteGameProfile>> profile = aiAccount.getYggdrasilService().getProfileRepository().binding(aiAccount.getUUID());
+            return createBooleanBinding(() -> {
+                Set<TextureType> uploadableTextures = profile.get()
+                        .map(AuthlibInjectorAccount::getUploadableTextures)
+                        .orElse(emptySet());
+                return uploadableTextures.contains(TextureType.SKIN);
+            }, profile);
+        } else if (account instanceof OfflineAccount || account instanceof MicrosoftAccount) {
             return createBooleanBinding(() -> true);
         } else {
             return createBooleanBinding(() -> false);
@@ -151,6 +142,10 @@ public class AccountListItem extends RadioButton {
     public Task<?> uploadSkin() {
         if (account instanceof OfflineAccount) {
             Controllers.dialog(new OfflineAccountSkinPane((OfflineAccount) account));
+            return null;
+        }
+        if (account instanceof MicrosoftAccount) {
+            FXUtils.openLink("https://www.minecraft.net/msaprofile/mygames/editskin");
             return null;
         }
         if (!(account instanceof YggdrasilAccount)) {
@@ -167,14 +162,14 @@ public class AccountListItem extends RadioButton {
 
         return refreshAsync()
                 .thenRunAsync(() -> {
-                    BufferedImage skinImg;
-                    try {
-                        skinImg = ImageIO.read(selectedFile);
+                    Image skinImg;
+                    try (FileInputStream input = new FileInputStream(selectedFile)) {
+                        skinImg = new Image(input);
                     } catch (IOException e) {
                         throw new InvalidSkinException("Failed to read skin image", e);
                     }
-                    if (skinImg == null) {
-                        throw new InvalidSkinException("Failed to read skin image");
+                    if (skinImg.isError()) {
+                        throw new InvalidSkinException("Failed to read skin image", skinImg.getException());
                     }
                     NormalizedSkin skin = new NormalizedSkin(skinImg);
                     String model = skin.isSlim() ? "slim" : "";
@@ -219,17 +214,5 @@ public class AccountListItem extends RadioButton {
 
     public StringProperty subtitleProperty() {
         return subtitle;
-    }
-
-    public Image getImage() {
-        return image.get();
-    }
-
-    public void setImage(Image image) {
-        this.image.set(image);
-    }
-
-    public ObjectProperty<Image> imageProperty() {
-        return image;
     }
 }

@@ -25,7 +25,6 @@ import org.jackhuang.hmcl.auth.authlibinjector.AuthlibInjectorArtifactInfo;
 import org.jackhuang.hmcl.auth.authlibinjector.AuthlibInjectorArtifactProvider;
 import org.jackhuang.hmcl.auth.authlibinjector.AuthlibInjectorDownloadException;
 import org.jackhuang.hmcl.auth.yggdrasil.Texture;
-import org.jackhuang.hmcl.auth.yggdrasil.TextureModel;
 import org.jackhuang.hmcl.auth.yggdrasil.TextureType;
 import org.jackhuang.hmcl.game.Arguments;
 import org.jackhuang.hmcl.game.LaunchOptions;
@@ -67,6 +66,10 @@ public class OfflineAccount extends Account {
         }
     }
 
+    public AuthlibInjectorArtifactProvider getDownloader() {
+        return downloader;
+    }
+
     @Override
     public UUID getUUID() {
         return uuid;
@@ -82,6 +85,11 @@ public class OfflineAccount extends Account {
         return username;
     }
 
+    @Override
+    public String getIdentifier() {
+        return username + ":" + username;
+    }
+
     public Skin getSkin() {
         return skin;
     }
@@ -91,20 +99,14 @@ public class OfflineAccount extends Account {
         invalidate();
     }
 
-    private boolean loadAuthlibInjector(Skin skin) {
-        if (skin == null) return false;
-        if (skin.getType() == Skin.Type.DEFAULT) return false;
-        TextureModel defaultModel = TextureModel.detectUUID(getUUID());
-        if (skin.getType() == Skin.Type.ALEX && defaultModel == TextureModel.ALEX ||
-            skin.getType() == Skin.Type.STEVE && defaultModel == TextureModel.STEVE) {
-            return false;
-        }
-        return true;
+    protected boolean loadAuthlibInjector(Skin skin) {
+        return skin != null && skin.getType() != Skin.Type.DEFAULT;
     }
 
     @Override
     public AuthInfo logIn() throws AuthenticationException {
-        AuthInfo authInfo = new AuthInfo(username, uuid, UUIDTypeAdapter.fromUUID(UUID.randomUUID()), "{}");
+        // Using "legacy" user type here because "mojang" user type may cause "invalid session token" or "disconnected" when connecting to a game server.
+        AuthInfo authInfo = new AuthInfo(username, uuid, UUIDTypeAdapter.fromUUID(UUID.randomUUID()), AuthInfo.USER_TYPE_MSA, "{}");
 
         if (loadAuthlibInjector(skin)) {
             CompletableFuture<AuthlibInjectorArtifactInfo> artifactTask = CompletableFuture.supplyAsync(() -> {
@@ -144,7 +146,7 @@ public class OfflineAccount extends Account {
         private YggdrasilServer server;
 
         public OfflineAuthInfo(AuthInfo authInfo, AuthlibInjectorArtifactInfo artifact) {
-            super(authInfo.getUsername(), authInfo.getUUID(), authInfo.getAccessToken(), authInfo.getUserProperties());
+            super(authInfo.getUsername(), authInfo.getUUID(), authInfo.getAccessToken(), USER_TYPE_MSA, authInfo.getUserProperties());
 
             this.artifact = artifact;
         }
@@ -157,7 +159,8 @@ public class OfflineAccount extends Account {
             server.start();
 
             try {
-                server.addCharacter(new YggdrasilServer.Character(uuid, username, skin.load(username).run()));
+                server.addCharacter(new YggdrasilServer.Character(uuid, username,
+                        skin != null ? skin.load(username).run() : null));
             } catch (IOException e) {
                 // ignore
             } catch (Exception e) {
@@ -180,8 +183,8 @@ public class OfflineAccount extends Account {
     }
 
     @Override
-    public Optional<AuthInfo> playOffline() throws AuthenticationException {
-        return Optional.of(logIn());
+    public AuthInfo playOffline() throws AuthenticationException {
+        return logIn();
     }
 
     @Override
@@ -216,6 +219,6 @@ public class OfflineAccount extends Account {
         if (!(obj instanceof OfflineAccount))
             return false;
         OfflineAccount another = (OfflineAccount) obj;
-        return username.equals(another.username);
+        return isPortable() == another.isPortable() && username.equals(another.username);
     }
 }
